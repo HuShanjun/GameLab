@@ -33,3 +33,6 @@ CrashReportClient/
 
 # Misc
 *.log
+
+# VgCrowdLegion local content (test maps / materials) — not versioned
+Client/Plugins/Development/VgCrowdLegion/Content/
