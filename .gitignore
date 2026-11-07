@@ -1,0 +1,35 @@
+# Unreal Engine generated directories
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+
+# Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+.idea/
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Compiled source
+*.pdb
+
+# Crashpad / crash reports
+CrashReportClient/
+
+# Automation
+*.automation.json
+
+# Misc
+*.log
