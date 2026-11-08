@@ -1,0 +1,17 @@
+{
+    "files.exclude": {
+        "**/.git": true,
+        "**/.DS_Store": true,
+        "**/node_modules": true,
+
+        "**/.vs": true,
+        "**/*.sln*": true,
+        "**/.vsconfig": true,
+
+        "**/Content": true,
+        "**/Binaries": true,
+        "**/DerivedDataCache": true,
+        "**/Intermediate": true,
+        "**/Saved": true,
+    }
+}
