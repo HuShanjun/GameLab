@@ -35,6 +35,14 @@ void FVgCrowdLegionEditorModule::RegisterMenus()
 		FSlateIcon(),
 		FUIAction(FExecuteAction::CreateStatic(&FCrowdLegionExporter::ExecuteExportFromSelectedAsset))
 	);
+
+	Section.AddMenuEntry(
+		"GenerateArcherBoneAnimationMaterials",
+		LOCTEXT("GenerateArcherBoneAnim_Label", "生成 Archer BoneAnimation 材质"),
+		LOCTEXT("GenerateArcherBoneAnim_Tooltip", "创建 M_Archer_BoneAnimation 父材质（TextureSample+GetCrowdLegionFrame+MF_CrowdLegionBoneAnimation）及三个 BaseColor 示例材质实例"),
+		FSlateIcon(),
+		FUIAction(FExecuteAction::CreateStatic(&FCrowdLegionExporter::ExecuteGenerateArcherBoneAnimationMaterials))
+	);
 }
 
 #undef LOCTEXT_NAMESPACE

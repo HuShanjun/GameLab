@@ -177,8 +177,8 @@ int32 UCrowdStatsComponent::GetDeadUnitCount() const
 int32 UCrowdStatsComponent::CalculateInstanceCurrentFrame(const FCrowdCellInstanceData& D, float CurrentTime) const
 {
 	const UCrowdUnitComponent* Comp = GetValidCrowdComponent();
-	float StartFrame = 0.0f;
-	float NumFrames = 60.0f;
+	float StartFrame = 0.f;
+	float EndFrame = 0.f;
 
 	if (Comp)
 	{
@@ -186,21 +186,16 @@ int32 UCrowdStatsComponent::CalculateInstanceCurrentFrame(const FCrowdCellInstan
 		if (Anims.IsValidIndex(D.AnimIndex))
 		{
 			StartFrame = static_cast<float>(Anims[D.AnimIndex].StartFrame);
-			NumFrames  = static_cast<float>(FMath::Max(1, Anims[D.AnimIndex].NumFrames));
+			const int32 NumFrames = FMath::Max(1, Anims[D.AnimIndex].NumFrames);
+			EndFrame = StartFrame + static_cast<float>(NumFrames - 1);
 		}
 	}
 
-	float FrameOffset = 0.0f;
-	if (D.bLoop)
-	{
-		const float LoopSec = FMath::Max(0.0f, (CurrentTime + D.Phase) * FMath::Abs(D.PlayRate));
-		FrameOffset = FMath::FloorToFloat(FMath::Fmod(LoopSec * 30.0f, NumFrames));
-	}
-	else
-	{
-		const float ElapsedSec = FMath::Max(0.0f, (CurrentTime - D.Phase) * FMath::Abs(D.PlayRate));
-		FrameOffset = FMath::Min(NumFrames - 1.0f, FMath::FloorToFloat(ElapsedSec * 30.0f));
-	}
+	const float Elapsed = FMath::Max(0.f, (CurrentTime + D.Phase) * FMath::Abs(D.PlayRate));
+	const float Length = FMath::Max(1.f, EndFrame - StartFrame + 1.f);
+	const float FrameOffset = D.bLoop
+		? FMath::FloorToFloat(FMath::Fmod(Elapsed * 30.f, Length))
+		: FMath::Min(Length - 1.f, FMath::FloorToFloat(Elapsed * 30.f));
 
 	return FMath::RoundToInt(StartFrame + FrameOffset);
 }

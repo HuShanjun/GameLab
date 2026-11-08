@@ -53,12 +53,12 @@ struct VGCROWDLEGION_API FCrowdCellInstanceData
 {
 	GENERATED_BODY()
 
-	// CustomData 布局约定 (与 M_Crowd_Legion 中 PerInstanceCustomData 节点下标严格对齐)
-	static constexpr int32 CD_StartFrame = 0; // [0] 起始全局帧
-	static constexpr int32 CD_NumFrames  = 1; // [1] 动画总帧数
-	static constexpr int32 CD_Phase      = 2; // [2] 相位/时间参考 (循环动作=随机错落相位, 单次动作=触发时刻时间戳)
-	static constexpr int32 CD_StartTime  = 2; // 兼容别名
-	static constexpr int32 CD_PackedRate = 3; // [3] 复合播放速率与循环标志 (正数=循环, 负数=单次定格)
+	// CustomData 布局约定 (与 GetCrowdLegionFrame / M_Crowd_Legion PICD 下标对齐):
+	// [0]=TimeOffset [1]=PlayRate(>=0 loop, <0 one-shot) [2]=StartFrame [3]=EndFrame
+	static constexpr int32 CD_TimeOffset = 0;
+	static constexpr int32 CD_PlayRate   = 1;
+	static constexpr int32 CD_StartFrame = 2;
+	static constexpr int32 CD_EndFrame   = 3;
 	static constexpr int32 CustomDataCount = 4;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdCell")
@@ -70,11 +70,11 @@ struct VGCROWDLEGION_API FCrowdCellInstanceData
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdCell")
 	bool bLoop = true;
 
-	/** 相位参数：循环动作作为 0~10s 随机相位错落；单次动作作为触发时刻的时间戳 */
+	/** CPU 侧存储的 TimeOffset：循环 = 0~10s 随机；单次 = -Now 使 Time+TimeOffset 从 0 起播 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdCell")
 	float Phase = 0.0f;
 
-	/** 兼容别名属性 */
+	/** 兼容别名：与 Phase 同值 (stored TimeOffset) */
 	float StartTime = 0.0f;
 };
 

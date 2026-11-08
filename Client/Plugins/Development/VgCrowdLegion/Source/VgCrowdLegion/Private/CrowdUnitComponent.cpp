@@ -134,7 +134,7 @@ int32 UCrowdUnitComponent::AddCell(const FTransform& Transform, int32 AnimIndex,
 	Data.AnimIndex = AnimIndex;
 	Data.PlayRate  = PlayRate;
 	Data.bLoop     = bLoop;
-	Data.Phase     = bLoop ? (FMath::FRand() * 10.0f) : GetCurrentAnimationTime(GetWorld());
+	Data.Phase     = bLoop ? (FMath::FRand() * 10.0f) : -GetCurrentAnimationTime(GetWorld());
 	Data.StartTime = Data.Phase;
 	const int32 NewIdx = HISMCmp->AddInstance(Transform, true);
 	CellsData.Add(Data);
@@ -170,8 +170,8 @@ void UCrowdUnitComponent::BatchAddCells(const TArray<FTransform>& Transforms, in
 		Data.AnimIndex = AnimIndex;
 		Data.PlayRate  = PlayRate;
 		Data.bLoop     = bLoop;
-		// 循环动作赋予 0~10s 随机错落相位；单次动作记录当前时间戳
-		Data.Phase     = bLoop ? (FMath::FRand() * 10.0f) : BaseTime;
+		// 循环动作赋予 0~10s 随机 TimeOffset；单次动作为 -Now
+		Data.Phase     = bLoop ? (FMath::FRand() * 10.0f) : -BaseTime;
 		Data.StartTime = Data.Phase;
 		CellsData.Add(Data);
 		PushCellCustomData(StartIdx + i, false);
@@ -268,23 +268,22 @@ void UCrowdUnitComponent::PushCellCustomData(int32 Index, bool bMarkRenderStateD
 
 	const FCrowdCellInstanceData& D = CellsData[Index];
 
-	float StartFrame = 0.0f;
-	float NumFrames = 60.0f;
+	float StartFrame = 0.f;
+	float EndFrame = 0.f;
 	if (Animations.IsValidIndex(D.AnimIndex))
 	{
-		StartFrame = static_cast<float>(Animations[D.AnimIndex].StartFrame);
-		NumFrames  = static_cast<float>(FMath::Max(1, Animations[D.AnimIndex].NumFrames));
+		StartFrame = float(Animations[D.AnimIndex].StartFrame);
+		const int32 NumFrames = FMath::Max(1, Animations[D.AnimIndex].NumFrames);
+		EndFrame = StartFrame + float(NumFrames - 1);
 	}
-
-	// 符号位编码循环参数：正数表示循环播放，负数表示单次播放并在最后一帧定格
 	const float SafeRate = FMath::Max(0.0001f, FMath::Abs(D.PlayRate));
-	const float PackedRate = D.bLoop ? SafeRate : -SafeRate;
-
-	float CustomData[FCrowdCellInstanceData::CustomDataCount];
+	const float SignedRate = D.bLoop ? SafeRate : -SafeRate;
+	// D.Phase already holds random phase (loop) or -Now per SetCellAnim / AddCell
+	float CustomData[4];
+	CustomData[FCrowdCellInstanceData::CD_TimeOffset] = D.Phase; // TimeOffset
+	CustomData[FCrowdCellInstanceData::CD_PlayRate] = SignedRate;
 	CustomData[FCrowdCellInstanceData::CD_StartFrame] = StartFrame;
-	CustomData[FCrowdCellInstanceData::CD_NumFrames]  = NumFrames;
-	CustomData[FCrowdCellInstanceData::CD_Phase]      = D.Phase;
-	CustomData[FCrowdCellInstanceData::CD_PackedRate] = PackedRate;
+	CustomData[FCrowdCellInstanceData::CD_EndFrame] = EndFrame;
 	HISMCmp->SetCustomData(Index, MakeArrayView(CustomData), bMarkRenderStateDirty);
 }
 
@@ -316,7 +315,7 @@ void UCrowdUnitComponent::SetCellAnim(int32 CellIndex, int32 NewAnimIndex, float
 	CellsData[CellIndex].AnimIndex = NewAnimIndex;
 	CellsData[CellIndex].PlayRate = InPlayRate;
 	CellsData[CellIndex].bLoop = bInLoop;
-	CellsData[CellIndex].Phase = bInLoop ? (FMath::FRand() * 10.0f) : GetCurrentAnimationTime(GetWorld());
+	CellsData[CellIndex].Phase = bInLoop ? (FMath::FRand() * 10.0f) : -GetCurrentAnimationTime(GetWorld());
 	CellsData[CellIndex].StartTime = CellsData[CellIndex].Phase;
 	PushCellCustomData(CellIndex, true);
 }
@@ -344,7 +343,7 @@ void UCrowdUnitComponent::SetAllCellsAnim(int32 NewAnimIndex, float InPlayRate, 
 		CellsData[i].AnimIndex = NewAnimIndex;
 		CellsData[i].PlayRate = InPlayRate;
 		CellsData[i].bLoop = bInLoop;
-		CellsData[i].Phase = bInLoop ? (FMath::FRand() * 10.0f) : CurrentTime;
+		CellsData[i].Phase = bInLoop ? (FMath::FRand() * 10.0f) : -CurrentTime;
 		CellsData[i].StartTime = CellsData[i].Phase;
 		PushCellCustomData(i, i == Count - 1);
 	}

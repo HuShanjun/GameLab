@@ -10,11 +10,13 @@ Build/
 .vscode/
 .idea/
 *.sln
+*.slnx
 *.suo
 *.opensdf
 *.sdf
 *.VC.db
 *.VC.opendb
+.vsconfig
 
 # macOS
 .DS_Store
@@ -34,5 +36,12 @@ CrashReportClient/
 # Misc
 *.log
 
-# VgCrowdLegion local content (test maps / materials) — not versioned
-Client/Plugins/Development/VgCrowdLegion/Content/
+# VgCrowdLegion local content (test maps / legacy local materials).
+# Generated masters under Content/Materials are versioned.
+Client/Plugins/Development/VgCrowdLegion/Content/*
+!Client/Plugins/Development/VgCrowdLegion/Content/Materials/
+Client/Plugins/Development/VgCrowdLegion/Content/Materials/*
+!Client/Plugins/Development/VgCrowdLegion/Content/Materials/GetCrowdLegionFrame.uasset
+!Client/Plugins/Development/VgCrowdLegion/Content/Materials/MF_CrowdLegionBoneAnimation.uasset
+!Client/Plugins/Development/VgCrowdLegion/Content/Materials/M_Crowd_Legion.uasset
+/Docs/superpowers/plans

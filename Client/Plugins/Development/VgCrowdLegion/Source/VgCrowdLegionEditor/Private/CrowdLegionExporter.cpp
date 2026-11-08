@@ -6,13 +6,14 @@
 #include "ContentBrowserModule.h"
 #include "IContentBrowserSingleton.h"
 #include "Misc/MessageDialog.h"
+#include "Misc/App.h"
+#include "FileHelpers.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialFunction.h"
 #include "Materials/MaterialInstanceConstant.h"
-#include "Materials/MaterialExpressionCustom.h"
 #include "Materials/MaterialExpressionPerInstanceCustomData.h"
 #include "Materials/MaterialExpressionTime.h"
 #include "Materials/MaterialExpressionVectorParameter.h"
@@ -20,7 +21,18 @@
 #include "Materials/MaterialExpressionMaterialFunctionCall.h"
 #include "Materials/MaterialExpressionFunctionInput.h"
 #include "Materials/MaterialExpressionTextureSampleParameter2D.h"
+#include "Materials/MaterialExpressionMakeMaterialAttributes.h"
 #include "Materials/MaterialExpressionSubstrate.h"
+#include "Materials/MaterialExpressionFunctionOutput.h"
+#include "Materials/MaterialExpressionAbs.h"
+#include "Materials/MaterialExpressionAdd.h"
+#include "Materials/MaterialExpressionSubtract.h"
+#include "Materials/MaterialExpressionMultiply.h"
+#include "Materials/MaterialExpressionMax.h"
+#include "Materials/MaterialExpressionMin.h"
+#include "Materials/MaterialExpressionFmod.h"
+#include "Materials/MaterialExpressionFloor.h"
+#include "Materials/MaterialExpressionIf.h"
 #include "MaterialEditingLibrary.h"
 #include "MaterialGraph/MaterialGraph.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -34,10 +46,23 @@
 #include "Engine/DataTable.h"
 #include "CrowdUnitComponent.h"
 
-static const TCHAR* GPluginMFPackage = TEXT("/VgCrowdLegion/Materials/MF_BoneAnimation");
+static FAutoConsoleCommand GGenerateArcherBoneAnimMatsCmd(
+	TEXT("CrowdLegion.GenerateArcherBoneAnimationMaterials"),
+	TEXT("Generate Archer BoneAnimation parent material and three BaseColor material instances."),
+	FConsoleCommandDelegate::CreateStatic(&FCrowdLegionExporter::ExecuteGenerateArcherBoneAnimationMaterials));
+
+static const TCHAR* GPluginMFPackage = TEXT("/VgCrowdLegion/Materials/MF_CrowdLegionBoneAnimation");
 static const TCHAR* GPluginMasterMatPackage = TEXT("/VgCrowdLegion/Materials/M_Crowd_Legion");
+static const TCHAR* GGetCrowdLegionFramePkg = TEXT("/VgCrowdLegion/Materials/GetCrowdLegionFrame");
+static const TCHAR* GLegacyPluginMFPackage = TEXT("/VgCrowdLegion/Materials/MF_BoneAnimation");
 static const TCHAR* GOfficialMFPath = TEXT("/AnimToTexture/Materials/MaterialFunctions/MF_BoneAnimation.MF_BoneAnimation");
 static const TCHAR* GOfficialMasterMatPath = TEXT("/AnimToTexture/Characters/Mannequin/Materials/BoneAnimation/M_Body_BoneAnimation.M_Body_BoneAnimation");
+
+static const TCHAR* GArcherBoneAnimParentPkg = TEXT("/Game/CrowdLegion/Characters/Archer/Materials/BoneAnimation/M_Archer_BoneAnimation");
+static const TCHAR* GArcherBoneAnimDir = TEXT("/Game/CrowdLegion/Characters/Archer/Materials/BoneAnimation");
+static const TCHAR* GTexSoldierColor = TEXT("/Game/CrowdLegion/Characters/Archer/Textures/T_Soldier_C_Color.T_Soldier_C_Color");
+static const TCHAR* GTexSoldierColor2 = TEXT("/Game/CrowdLegion/Characters/Archer/Textures/T_Soldier_C_Color_2.T_Soldier_C_Color_2");
+static const TCHAR* GTexSoldierColor4 = TEXT("/Game/CrowdLegion/Characters/Archer/Textures/T_Soldier_C_Color_4.T_Soldier_C_Color_4");
 
 UAnimToTextureDataAsset* FCrowdLegionExporter::GetSelectedAnimToTextureDataAsset()
 {
@@ -81,7 +106,7 @@ void FCrowdLegionExporter::ExecuteExportFromSelectedAsset()
 	const FString BaseDir = FPackageName::GetLongPackagePath(DataAssetPackage);
 	const FString SkelMeshName = SkelMesh->GetName();
 
-	// 3.4: 检查并确保当前插件材质目录下有 M_Crowd_Legion 和 MF_BoneAnimation
+	// 3.4: 检查并确保当前插件材质目录下有 M_Crowd_Legion 和 MF_CrowdLegionBoneAnimation
 	UMaterial* MasterMaterial = nullptr;
 	UMaterialFunction* BoneAnimMF = nullptr;
 	if (!EnsurePluginMasterMaterials(MasterMaterial, BoneAnimMF))
@@ -133,24 +158,471 @@ void FCrowdLegionExporter::ExecuteExportFromSelectedAsset()
 	}
 }
 
+static UMaterialExpressionFunctionInput* AddScalarFunctionInput(
+	UMaterialFunction* Func,
+	const FName& Name,
+	float PreviewScalar,
+	int32 PosX,
+	int32 PosY,
+	bool bUsePreviewAsDefault = true)
+{
+	UMaterialExpressionFunctionInput* Input = Cast<UMaterialExpressionFunctionInput>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			Func, UMaterialExpressionFunctionInput::StaticClass(), PosX, PosY));
+	if (!Input)
+	{
+		return nullptr;
+	}
+	Input->InputName = Name;
+	Input->InputType = FunctionInput_Scalar;
+	Input->PreviewValue = FVector4f(PreviewScalar, 0.f, 0.f, 0.f);
+	Input->bUsePreviewValueAsDefault = bUsePreviewAsDefault;
+	return Input;
+}
+
+bool FCrowdLegionExporter::EnsureGetCrowdLegionFrame(UMaterialFunction*& OutFunc)
+{
+	OutFunc = nullptr;
+	const FString ObjectPath = FString(GGetCrowdLegionFramePkg) + TEXT(".GetCrowdLegionFrame");
+	OutFunc = Cast<UMaterialFunction>(StaticLoadObject(UMaterialFunction::StaticClass(), nullptr, *ObjectPath));
+	if (OutFunc)
+	{
+		return true;
+	}
+
+	UPackage* Package = CreatePackage(GGetCrowdLegionFramePkg);
+	if (!Package)
+	{
+		return false;
+	}
+	Package->FullyLoad();
+
+	OutFunc = NewObject<UMaterialFunction>(Package, FName(TEXT("GetCrowdLegionFrame")), RF_Public | RF_Standalone);
+	if (!OutFunc)
+	{
+		return false;
+	}
+
+	OutFunc->PreEditChange(nullptr);
+
+	// --- Function inputs ---
+	UMaterialExpressionFunctionInput* InTimeOffset = AddScalarFunctionInput(OutFunc, TEXT("TimeOffset"), 0.f, -1400, -200);
+	UMaterialExpressionFunctionInput* InPlayrate = AddScalarFunctionInput(OutFunc, TEXT("Playrate"), 1.f, -1400, -50);
+	UMaterialExpressionFunctionInput* InStartFrame = AddScalarFunctionInput(OutFunc, TEXT("StartFrame"), 0.f, -1400, 100);
+	UMaterialExpressionFunctionInput* InEndFrame = AddScalarFunctionInput(OutFunc, TEXT("EndFrame"), 1.f, -1400, 250);
+	UMaterialExpressionFunctionInput* InSampleRate = AddScalarFunctionInput(OutFunc, TEXT("SampleRate"), 30.f, -1400, 400);
+	UMaterialExpressionFunctionInput* InTime = AddScalarFunctionInput(OutFunc, TEXT("Time"), 0.f, -1400, 550, true);
+
+	UMaterialExpressionTime* InternalTime = Cast<UMaterialExpressionTime>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionTime::StaticClass(), -1600, 550));
+
+	if (!InTimeOffset || !InPlayrate || !InStartFrame || !InEndFrame || !InSampleRate || !InTime || !InternalTime)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame function inputs."));
+		return false;
+	}
+
+	InternalTime->bIgnorePause = true;
+	InTime->Preview.Connect(0, InternalTime);
+
+	// 1. RateAbs = Abs(Playrate)
+	UMaterialExpressionAbs* RateAbs = Cast<UMaterialExpressionAbs>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionAbs::StaticClass(), -1100, -50));
+	if (!RateAbs)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame expression (RateAbs)."));
+		return false;
+	}
+	RateAbs->Input.Connect(0, InPlayrate);
+
+	// 2. Elapsed = (Time + TimeOffset) * RateAbs * SampleRate
+	UMaterialExpressionAdd* TimePlusOffset = Cast<UMaterialExpressionAdd>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionAdd::StaticClass(), -900, 200));
+	if (!TimePlusOffset)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame expression (TimePlusOffset)."));
+		return false;
+	}
+	TimePlusOffset->A.Connect(0, InTime);
+	TimePlusOffset->B.Connect(0, InTimeOffset);
+
+	UMaterialExpressionMultiply* ElapsedStep1 = Cast<UMaterialExpressionMultiply>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionMultiply::StaticClass(), -700, 200));
+	if (!ElapsedStep1)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame expression (ElapsedStep1)."));
+		return false;
+	}
+	ElapsedStep1->A.Connect(0, TimePlusOffset);
+	ElapsedStep1->B.Connect(0, RateAbs);
+
+	UMaterialExpressionMultiply* Elapsed = Cast<UMaterialExpressionMultiply>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionMultiply::StaticClass(), -500, 200));
+	if (!Elapsed)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame expression (Elapsed)."));
+		return false;
+	}
+	Elapsed->A.Connect(0, ElapsedStep1);
+	Elapsed->B.Connect(0, InSampleRate);
+
+	// 3. Length = Max(1, EndFrame - StartFrame + 1)
+	UMaterialExpressionSubtract* FrameSpan = Cast<UMaterialExpressionSubtract>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionSubtract::StaticClass(), -900, 450));
+	if (!FrameSpan)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame expression (FrameSpan)."));
+		return false;
+	}
+	FrameSpan->A.Connect(0, InEndFrame);
+	FrameSpan->B.Connect(0, InStartFrame);
+
+	UMaterialExpressionAdd* SpanPlusOne = Cast<UMaterialExpressionAdd>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionAdd::StaticClass(), -700, 450));
+	if (!SpanPlusOne)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame expression (SpanPlusOne)."));
+		return false;
+	}
+	SpanPlusOne->A.Connect(0, FrameSpan);
+	SpanPlusOne->ConstB = 1.f;
+
+	UMaterialExpressionMax* Length = Cast<UMaterialExpressionMax>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionMax::StaticClass(), -500, 450));
+	if (!Length)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame expression (Length)."));
+		return false;
+	}
+	Length->ConstA = 1.f;
+	Length->B.Connect(0, SpanPlusOne);
+
+	// 4. Loop path: Floor(Fmod(Elapsed, Length))
+	UMaterialExpressionFmod* LoopFmod = Cast<UMaterialExpressionFmod>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionFmod::StaticClass(), -300, 50));
+	if (!LoopFmod)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame expression (LoopFmod)."));
+		return false;
+	}
+	LoopFmod->A.Connect(0, Elapsed);
+	LoopFmod->B.Connect(0, Length);
+
+	UMaterialExpressionFloor* LoopOffset = Cast<UMaterialExpressionFloor>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionFloor::StaticClass(), -100, 50));
+	if (!LoopOffset)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame expression (LoopOffset)."));
+		return false;
+	}
+	LoopOffset->Input.Connect(0, LoopFmod);
+
+	// 5. One-shot path: Min(Length - 1, Floor(Elapsed))
+	UMaterialExpressionFloor* FloorElapsed = Cast<UMaterialExpressionFloor>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionFloor::StaticClass(), -300, 350));
+	if (!FloorElapsed)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame expression (FloorElapsed)."));
+		return false;
+	}
+	FloorElapsed->Input.Connect(0, Elapsed);
+
+	UMaterialExpressionSubtract* LengthMinusOne = Cast<UMaterialExpressionSubtract>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionSubtract::StaticClass(), -300, 500));
+	if (!LengthMinusOne)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame expression (LengthMinusOne)."));
+		return false;
+	}
+	LengthMinusOne->A.Connect(0, Length);
+	LengthMinusOne->ConstB = 1.f;
+
+	UMaterialExpressionMin* OneShotOffset = Cast<UMaterialExpressionMin>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionMin::StaticClass(), -100, 400));
+	if (!OneShotOffset)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame expression (OneShotOffset)."));
+		return false;
+	}
+	OneShotOffset->A.Connect(0, LengthMinusOne);
+	OneShotOffset->B.Connect(0, FloorElapsed);
+
+	// 6. bLoop from Playrate >= 0 via If
+	UMaterialExpressionIf* LoopSwitch = Cast<UMaterialExpressionIf>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionIf::StaticClass(), 100, 200));
+	if (!LoopSwitch)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame expression (LoopSwitch)."));
+		return false;
+	}
+	LoopSwitch->A.Connect(0, InPlayrate);
+	LoopSwitch->ConstB = 0.f;
+	LoopSwitch->AGreaterThanB.Connect(0, LoopOffset);
+	LoopSwitch->AEqualsB.Connect(0, LoopOffset);
+	LoopSwitch->ALessThanB.Connect(0, OneShotOffset);
+
+	// 7. Frame = StartFrame + Offset
+	UMaterialExpressionAdd* Frame = Cast<UMaterialExpressionAdd>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionAdd::StaticClass(), 300, 200));
+	if (!Frame)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame expression (Frame)."));
+		return false;
+	}
+	Frame->A.Connect(0, InStartFrame);
+	Frame->B.Connect(0, LoopSwitch);
+
+	UMaterialExpressionFunctionOutput* FrameOutput = Cast<UMaterialExpressionFunctionOutput>(
+		UMaterialEditingLibrary::CreateMaterialExpressionInFunction(
+			OutFunc, UMaterialExpressionFunctionOutput::StaticClass(), 500, 200));
+	if (!FrameOutput)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to create GetCrowdLegionFrame expression (FrameOutput)."));
+		return false;
+	}
+	FrameOutput->OutputName = TEXT("Frame");
+	FrameOutput->A.Connect(0, Frame);
+
+	OutFunc->UpdateInputOutputTypes();
+	UMaterialEditingLibrary::UpdateMaterialFunction(OutFunc);
+	OutFunc->PostEditChange();
+	OutFunc->MarkPackageDirty();
+	FAssetRegistryModule::AssetCreated(OutFunc);
+	UE_LOG(LogTemp, Log, TEXT("[CrowdLegionExporter] Created GetCrowdLegionFrame at '%s'."), GGetCrowdLegionFramePkg);
+	return true;
+}
+
+static void ClearMaterialExpressions(UMaterial* Material)
+{
+	if (!Material)
+	{
+		return;
+	}
+
+	TArray<UMaterialExpression*> ExistingExprs;
+	for (const TObjectPtr<UMaterialExpression>& Expr : Material->GetExpressions())
+	{
+		if (Expr)
+		{
+			ExistingExprs.Add(Expr.Get());
+		}
+	}
+	for (UMaterialExpression* Expr : ExistingExprs)
+	{
+		UMaterialEditingLibrary::DeleteMaterialExpression(Material, Expr);
+	}
+}
+
+static bool ConnectFunctionCallInput(UMaterialExpressionMaterialFunctionCall* Call, const FName& InputName, UMaterialExpression* Source)
+{
+	if (!Call || !Source)
+	{
+		return false;
+	}
+
+	for (FFunctionExpressionInput& FuncInput : Call->FunctionInputs)
+	{
+		if (FuncInput.ExpressionInput && FuncInput.ExpressionInput->InputName == InputName)
+		{
+			FuncInput.Input.Connect(0, Source);
+			return true;
+		}
+	}
+
+	UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Material function '%s' is missing input '%s'."),
+		Call->MaterialFunction ? *Call->MaterialFunction->GetName() : TEXT("None"), *InputName.ToString());
+	return false;
+}
+
+// PICD[0..3] = TimeOffset, Playrate, StartFrame, EndFrame → GetCrowdLegionFrame (+ Time, SampleRate).
+static UMaterialExpressionMaterialFunctionCall* AddCrowdLegionFrameCall(
+	UMaterial* Material,
+	UMaterialFunction* GetCrowdLegionFrameMF,
+	int32 PosX,
+	int32 PosY)
+{
+	if (!Material || !GetCrowdLegionFrameMF)
+	{
+		return nullptr;
+	}
+
+	auto AddPicd = [&](int32 DataIndex, float DefaultValue, int32 Y) -> UMaterialExpressionPerInstanceCustomData*
+	{
+		UMaterialExpressionPerInstanceCustomData* Node = NewObject<UMaterialExpressionPerInstanceCustomData>(Material);
+		Node->DataIndex = DataIndex;
+		Node->ConstDefaultValue = DefaultValue;
+		Node->MaterialExpressionEditorX = PosX - 500;
+		Node->MaterialExpressionEditorY = Y;
+		Material->GetExpressionCollection().AddExpression(Node);
+		return Node;
+	};
+
+	UMaterialExpressionPerInstanceCustomData* CD_TimeOffset = AddPicd(0, 0.0f, PosY - 200);
+	UMaterialExpressionPerInstanceCustomData* CD_Playrate = AddPicd(1, 1.0f, PosY - 80);
+	UMaterialExpressionPerInstanceCustomData* CD_StartFrame = AddPicd(2, 0.0f, PosY + 40);
+	UMaterialExpressionPerInstanceCustomData* CD_EndFrame = AddPicd(3, 1.0f, PosY + 160);
+
+	UMaterialExpressionTime* TimeExpr = NewObject<UMaterialExpressionTime>(Material);
+	TimeExpr->bIgnorePause = true;
+	TimeExpr->MaterialExpressionEditorX = PosX - 500;
+	TimeExpr->MaterialExpressionEditorY = PosY + 300;
+	Material->GetExpressionCollection().AddExpression(TimeExpr);
+
+	UMaterialExpressionScalarParameter* SampleRateParam = NewObject<UMaterialExpressionScalarParameter>(Material);
+	SampleRateParam->ParameterName = TEXT("SampleRate");
+	SampleRateParam->DefaultValue = 30.0f;
+	SampleRateParam->MaterialExpressionEditorX = PosX - 500;
+	SampleRateParam->MaterialExpressionEditorY = PosY + 420;
+	Material->GetExpressionCollection().AddExpression(SampleRateParam);
+
+	UMaterialExpressionMaterialFunctionCall* FrameCall = NewObject<UMaterialExpressionMaterialFunctionCall>(Material);
+	FrameCall->MaterialExpressionEditorX = PosX;
+	FrameCall->MaterialExpressionEditorY = PosY;
+	Material->GetExpressionCollection().AddExpression(FrameCall);
+	FrameCall->SetMaterialFunction(GetCrowdLegionFrameMF);
+	FrameCall->UpdateFromFunctionResource();
+
+	if (!ConnectFunctionCallInput(FrameCall, TEXT("TimeOffset"), CD_TimeOffset) ||
+		!ConnectFunctionCallInput(FrameCall, TEXT("Playrate"), CD_Playrate) ||
+		!ConnectFunctionCallInput(FrameCall, TEXT("StartFrame"), CD_StartFrame) ||
+		!ConnectFunctionCallInput(FrameCall, TEXT("EndFrame"), CD_EndFrame) ||
+		!ConnectFunctionCallInput(FrameCall, TEXT("SampleRate"), SampleRateParam) ||
+		!ConnectFunctionCallInput(FrameCall, TEXT("Time"), TimeExpr))
+	{
+		return nullptr;
+	}
+
+	return FrameCall;
+}
+
+static int32 FindExpressionOutputIndex(UMaterialExpression* Expression, const FString& OutputName)
+{
+	if (!Expression || Expression->Outputs.Num() == 0)
+	{
+		return INDEX_NONE;
+	}
+
+	for (int32 OutIdx = 0; OutIdx < Expression->Outputs.Num(); ++OutIdx)
+	{
+		if (Expression->Outputs[OutIdx].OutputName.ToString() == OutputName)
+		{
+			return OutIdx;
+		}
+	}
+
+	return 0;
+}
+
+static void ConnectBoneAnimOutputs(UMaterial* Material, UMaterialExpressionMaterialFunctionCall* BoneAnimCall)
+{
+	FString MaOutputName = TEXT("Material Attributes");
+	for (const FFunctionExpressionOutput& FuncOutput : BoneAnimCall->FunctionOutputs)
+	{
+		if (UMaterialExpressionFunctionOutput* OutputExpr = FuncOutput.ExpressionOutput.Get())
+		{
+			const FString OutputName = OutputExpr->OutputName.ToString();
+			if (OutputName.Contains(TEXT("Material Attributes")) || OutputName.Contains(TEXT("MaterialAttributes")))
+			{
+				MaOutputName = OutputName;
+				break;
+			}
+		}
+	}
+
+	UMaterialEditorOnlyData* EditorOnly = Material->GetEditorOnlyData();
+	// Clear Front Material before the MA hookup so a mid-edit compile cannot treat raw Material Attributes as Substrate data.
+	UMaterialEditingLibrary::DisconnectMaterialProperty(Material, MP_FrontMaterial);
+
+	const int32 MaOutputIndex = FindExpressionOutputIndex(BoneAnimCall, MaOutputName);
+	if (MaOutputIndex != INDEX_NONE)
+	{
+		EditorOnly->MaterialAttributes.Connect(MaOutputIndex, BoneAnimCall);
+	}
+	UMaterialEditingLibrary::ConnectMaterialProperty(BoneAnimCall, *MaOutputName, MP_MaterialAttributes);
+
+	// Same CVar the previous crowd graph used. Front Material must be Substrate data when this is on.
+	static const auto CVarSubstrate = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.Substrate"));
+	const bool bSubstrateEnabled = (CVarSubstrate && CVarSubstrate->GetValueOnAnyThread() != 0);
+	if (!bSubstrateEnabled)
+	{
+		return;
+	}
+
+	// GetInputName(0) returns "Attributes"; the UPROPERTY is MaterialAttributes.
+	UMaterialExpressionSubstrateConvertMaterialAttributes* ConvertNode = NewObject<UMaterialExpressionSubstrateConvertMaterialAttributes>(Material);
+	ConvertNode->Material = Material;
+	ConvertNode->ShadingModelOverride = MSM_DefaultLit;
+	ConvertNode->MaterialExpressionEditorX = BoneAnimCall->MaterialExpressionEditorX + 300;
+	ConvertNode->MaterialExpressionEditorY = BoneAnimCall->MaterialExpressionEditorY;
+	Material->GetExpressionCollection().AddExpression(ConvertNode);
+
+	if (EditorOnly->MaterialAttributes.Expression)
+	{
+		ConvertNode->MaterialAttributes.Connect(EditorOnly->MaterialAttributes.OutputIndex, EditorOnly->MaterialAttributes.Expression);
+	}
+
+	const FString ConvertInputName = ConvertNode->GetInputName(0).ToString();
+	if (!ConvertNode->MaterialAttributes.GetTracedInput().Expression)
+	{
+		const bool bNamedConnect = !ConvertInputName.IsEmpty() && UMaterialEditingLibrary::ConnectMaterialExpressions(
+			BoneAnimCall, MaOutputName, ConvertNode, ConvertInputName);
+		if (!bNamedConnect || !ConvertNode->MaterialAttributes.Expression)
+		{
+			UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to connect bone MF '%s' to Substrate Convert input '%s' on %s."),
+				*MaOutputName, *ConvertInputName, *Material->GetName());
+		}
+	}
+
+	EditorOnly->FrontMaterial.Connect(0, ConvertNode);
+	UMaterialEditingLibrary::ConnectMaterialProperty(ConvertNode, TEXT(""), MP_FrontMaterial);
+}
+
 bool FCrowdLegionExporter::EnsurePluginMasterMaterials(UMaterial*& OutMasterMat, UMaterialFunction*& OutBoneAnimMF)
 {
-	// 1. 检查或创建 /CrowdLegion/Materials/MF_BoneAnimation
-	OutBoneAnimMF = Cast<UMaterialFunction>(StaticLoadObject(UMaterialFunction::StaticClass(), nullptr, *(FString(GPluginMFPackage) + TEXT(".MF_BoneAnimation"))));
+	UMaterialFunction* GetCrowdLegionFrameMF = nullptr;
+	if (!EnsureGetCrowdLegionFrame(GetCrowdLegionFrameMF))
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to ensure GetCrowdLegionFrame before MF_CrowdLegionBoneAnimation."));
+		return false;
+	}
+
+	// 1. 检查或创建 /VgCrowdLegion/Materials/MF_CrowdLegionBoneAnimation
+	OutBoneAnimMF = Cast<UMaterialFunction>(StaticLoadObject(UMaterialFunction::StaticClass(), nullptr, *(FString(GPluginMFPackage) + TEXT(".MF_CrowdLegionBoneAnimation"))));
 	if (!OutBoneAnimMF)
 	{
-		UMaterialFunction* OfficialSourceMF = Cast<UMaterialFunction>(StaticLoadObject(UMaterialFunction::StaticClass(), nullptr, GOfficialMFPath));
-		if (!OfficialSourceMF)
+		UMaterialFunction* SourceMF = Cast<UMaterialFunction>(StaticLoadObject(
+			UMaterialFunction::StaticClass(), nullptr, *(FString(GLegacyPluginMFPackage) + TEXT(".MF_BoneAnimation"))));
+		const bool bMigratedFromLegacy = (SourceMF != nullptr);
+		if (!SourceMF)
 		{
-			UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Official MF_BoneAnimation template not found: %s"), GOfficialMFPath);
-			return false;
+			SourceMF = Cast<UMaterialFunction>(StaticLoadObject(UMaterialFunction::StaticClass(), nullptr, GOfficialMFPath));
+			if (!SourceMF)
+			{
+				UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Official MF_BoneAnimation template not found: %s"), GOfficialMFPath);
+				return false;
+			}
 		}
 
 		UPackage* MFPackage = CreatePackage(GPluginMFPackage);
 		if (!MFPackage) return false;
 		MFPackage->FullyLoad();
 
-		OutBoneAnimMF = Cast<UMaterialFunction>(StaticDuplicateObject(OfficialSourceMF, MFPackage, FName(TEXT("MF_BoneAnimation"))));
+		OutBoneAnimMF = Cast<UMaterialFunction>(StaticDuplicateObject(SourceMF, MFPackage, FName(TEXT("MF_CrowdLegionBoneAnimation"))));
 		if (!OutBoneAnimMF) return false;
 
 		OutBoneAnimMF->PreEditChange(nullptr);
@@ -214,11 +686,21 @@ bool FCrowdLegionExporter::EnsurePluginMasterMaterials(UMaterial*& OutMasterMat,
 		OutBoneAnimMF->PostEditChange();
 		OutBoneAnimMF->MarkPackageDirty();
 		FAssetRegistryModule::AssetCreated(OutBoneAnimMF);
-		UE_LOG(LogTemp, Log, TEXT("[CrowdLegionExporter] Successfully created plugin MF_BoneAnimation at '%s'!"), GPluginMFPackage);
+		if (bMigratedFromLegacy)
+		{
+			UE_LOG(LogTemp, Log, TEXT("[CrowdLegionExporter] Migrated legacy MF_BoneAnimation to MF_CrowdLegionBoneAnimation at '%s'."), GPluginMFPackage);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Log, TEXT("[CrowdLegionExporter] Successfully created plugin MF_CrowdLegionBoneAnimation at '%s'!"), GPluginMFPackage);
+		}
 	}
 
-	// 2. 检查或创建 /CrowdLegion/Materials/M_Crowd_Legion
+	// 2. 检查或强制重建 /VgCrowdLegion/Materials/M_Crowd_Legion
+	// 清空表达式后重建：PICD → GetCrowdLegionFrame → MF_CrowdLegionBoneAnimation.Frame
+	// 表面属性经 MakeMaterialAttributes 进入 MF，再输出到 Material Attributes。Substrate 开启时经 Convert 接到 Front Material。
 	OutMasterMat = Cast<UMaterial>(StaticLoadObject(UMaterial::StaticClass(), nullptr, *(FString(GPluginMasterMatPackage) + TEXT(".M_Crowd_Legion"))));
+	bool bCreatedMaster = false;
 	if (!OutMasterMat)
 	{
 		UMaterial* OfficialSourceMat = Cast<UMaterial>(StaticLoadObject(UMaterial::StaticClass(), nullptr, GOfficialMasterMatPath));
@@ -234,188 +716,104 @@ bool FCrowdLegionExporter::EnsurePluginMasterMaterials(UMaterial*& OutMasterMat,
 
 		OutMasterMat = Cast<UMaterial>(StaticDuplicateObject(OfficialSourceMat, MatPackage, FName(TEXT("M_Crowd_Legion"))));
 		if (!OutMasterMat) return false;
-
-		OutMasterMat->PreEditChange(nullptr);
-
-		// 重定向 MF_BoneAnimation 调用节点
-		UMaterialExpressionMaterialFunctionCall* BoneAnimFuncCall = nullptr;
-		for (const TObjectPtr<UMaterialExpression>& Expr : OutMasterMat->GetExpressions())
-		{
-			if (UMaterialExpressionMaterialFunctionCall* FC = Cast<UMaterialExpressionMaterialFunctionCall>(Expr))
-			{
-				if (FC->MaterialFunction && FC->MaterialFunction->GetName().Contains(TEXT("BoneAnimation")))
-				{
-					BoneAnimFuncCall = FC;
-					break;
-				}
-			}
-		}
-
-		if (BoneAnimFuncCall)
-		{
-			BoneAnimFuncCall->MaterialFunction = OutBoneAnimMF;
-			BoneAnimFuncCall->UpdateFromFunctionResource();
-		}
-
-		// 构建标准 PBR 与 Substrate 兼容表面着色网络
-		UMaterialEditorOnlyData* EditorOnly = OutMasterMat->GetEditorOnlyData();
-
-		UMaterialExpressionTextureSampleParameter2D* BaseColorParam = NewObject<UMaterialExpressionTextureSampleParameter2D>(OutMasterMat);
-		BaseColorParam->ParameterName = TEXT("BaseColorTexture");
-		BaseColorParam->MaterialExpressionEditorX = -600;
-		BaseColorParam->MaterialExpressionEditorY = -400;
-		OutMasterMat->GetExpressionCollection().AddExpression(BaseColorParam);
-
-		UMaterialExpressionScalarParameter* MetallicParam = NewObject<UMaterialExpressionScalarParameter>(OutMasterMat);
-		MetallicParam->ParameterName = TEXT("Metallic");
-		MetallicParam->DefaultValue = 0.0f;
-		MetallicParam->MaterialExpressionEditorX = -600;
-		MetallicParam->MaterialExpressionEditorY = -150;
-		OutMasterMat->GetExpressionCollection().AddExpression(MetallicParam);
-
-		UMaterialExpressionScalarParameter* RoughnessParam = NewObject<UMaterialExpressionScalarParameter>(OutMasterMat);
-		RoughnessParam->ParameterName = TEXT("Roughness");
-		RoughnessParam->DefaultValue = 0.5f;
-		RoughnessParam->MaterialExpressionEditorX = -600;
-		RoughnessParam->MaterialExpressionEditorY = 50;
-		OutMasterMat->GetExpressionCollection().AddExpression(RoughnessParam);
-
-		// 检查 Substrate 是否开启
-		static const auto CVarSubstrate = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.Substrate"));
-		const bool bSubstrateEnabled = (CVarSubstrate && CVarSubstrate->GetValueOnAnyThread() != 0);
-
-		if (bSubstrateEnabled)
-		{
-			UMaterialExpressionSubstrateShadingModels* SubstrateNode = NewObject<UMaterialExpressionSubstrateShadingModels>(OutMasterMat);
-			SubstrateNode->MaterialExpressionEditorX = -250;
-			SubstrateNode->MaterialExpressionEditorY = -200;
-			SubstrateNode->ShadingModelOverride = MSM_DefaultLit;
-			OutMasterMat->GetExpressionCollection().AddExpression(SubstrateNode);
-
-			SubstrateNode->BaseColor.Connect(0, BaseColorParam);
-			SubstrateNode->Metallic.Connect(0, MetallicParam);
-			SubstrateNode->Roughness.Connect(0, RoughnessParam);
-
-			EditorOnly->FrontMaterial.Connect(0, SubstrateNode);
-			UMaterialEditingLibrary::ConnectMaterialProperty(SubstrateNode, TEXT(""), MP_FrontMaterial);
-		}
-		else
-		{
-			EditorOnly->BaseColor.Connect(0, BaseColorParam);
-			EditorOnly->BaseColor.SetMask(1, 1, 1, 1, 0);
-			EditorOnly->Metallic.Connect(0, MetallicParam);
-			EditorOnly->Roughness.Connect(0, RoughnessParam);
-
-			UMaterialEditingLibrary::ConnectMaterialProperty(BaseColorParam, TEXT("RGB"), MP_BaseColor);
-			UMaterialEditingLibrary::ConnectMaterialProperty(MetallicParam, TEXT(""), MP_Metallic);
-			UMaterialEditingLibrary::ConnectMaterialProperty(RoughnessParam, TEXT(""), MP_Roughness);
-		}
-
-		// 构造由 4 个 PerInstanceCustomData 驱动的高性能零分支算帧网络 (支持无限多种动画)
-		// CustomData[0]: StartFrame (当前动画全局起始帧)
-		UMaterialExpressionPerInstanceCustomData* CD_StartFrame = NewObject<UMaterialExpressionPerInstanceCustomData>(OutMasterMat);
-		CD_StartFrame->DataIndex = 0;
-		CD_StartFrame->ConstDefaultValue = 0.0f;
-		CD_StartFrame->MaterialExpressionEditorX = -1000;
-		CD_StartFrame->MaterialExpressionEditorY = 300;
-		OutMasterMat->GetExpressionCollection().AddExpression(CD_StartFrame);
-
-		// CustomData[1]: NumFrames (当前动画总帧长)
-		UMaterialExpressionPerInstanceCustomData* CD_NumFrames = NewObject<UMaterialExpressionPerInstanceCustomData>(OutMasterMat);
-		CD_NumFrames->DataIndex = 1;
-		CD_NumFrames->ConstDefaultValue = 60.0f;
-		CD_NumFrames->MaterialExpressionEditorX = -1000;
-		CD_NumFrames->MaterialExpressionEditorY = 400;
-		OutMasterMat->GetExpressionCollection().AddExpression(CD_NumFrames);
-
-		// CustomData[2]: StartTime (动作开始时间戳，秒)
-		UMaterialExpressionPerInstanceCustomData* CD_StartTime = NewObject<UMaterialExpressionPerInstanceCustomData>(OutMasterMat);
-		CD_StartTime->DataIndex = 2;
-		CD_StartTime->ConstDefaultValue = 0.0f;
-		CD_StartTime->MaterialExpressionEditorX = -1000;
-		CD_StartTime->MaterialExpressionEditorY = 500;
-		OutMasterMat->GetExpressionCollection().AddExpression(CD_StartTime);
-
-		// CustomData[3]: PackedRate (复合播放速率与循环标志: 正数表示循环, 负数表示单次播放并在最后一帧定格)
-		UMaterialExpressionPerInstanceCustomData* CD_PackedRate = NewObject<UMaterialExpressionPerInstanceCustomData>(OutMasterMat);
-		CD_PackedRate->DataIndex = 3;
-		CD_PackedRate->ConstDefaultValue = 1.0f;
-		CD_PackedRate->MaterialExpressionEditorX = -1000;
-		CD_PackedRate->MaterialExpressionEditorY = 600;
-		OutMasterMat->GetExpressionCollection().AddExpression(CD_PackedRate);
-
-		// 全局时间节点 (使用 RealTime 确保在编辑器视口与游戏中均自增)
-		UMaterialExpressionTime* TimeExpr = NewObject<UMaterialExpressionTime>(OutMasterMat);
-		TimeExpr->bIgnorePause = true;
-		TimeExpr->MaterialExpressionEditorX = -1000;
-		TimeExpr->MaterialExpressionEditorY = 700;
-		OutMasterMat->GetExpressionCollection().AddExpression(TimeExpr);
-
-		// 采样帧率参数 (默认 30.0 FPS)
-		UMaterialExpressionScalarParameter* SampleRateParam = NewObject<UMaterialExpressionScalarParameter>(OutMasterMat);
-		SampleRateParam->ParameterName = TEXT("SampleRate");
-		SampleRateParam->DefaultValue = 30.0f;
-		SampleRateParam->MaterialExpressionEditorX = -1000;
-		SampleRateParam->MaterialExpressionEditorY = 800;
-		OutMasterMat->GetExpressionCollection().AddExpression(SampleRateParam);
-
-		// 纯算术无分支通用 Custom 表达式
-		UMaterialExpressionCustom* CustomCalc = NewObject<UMaterialExpressionCustom>(OutMasterMat);
-		CustomCalc->OutputType = CMOT_Float1;
-		CustomCalc->MaterialExpressionEditorX = -550;
-		CustomCalc->MaterialExpressionEditorY = 500;
-		CustomCalc->Inputs.Empty();
-
-		auto AddInput = [&](const FName& Name, UMaterialExpression* InputExpr)
-		{
-			FCustomInput In;
-			In.InputName = Name;
-			In.Input.Connect(0, InputExpr);
-			CustomCalc->Inputs.Add(In);
-		};
-
-		AddInput(TEXT("StartFrame"), CD_StartFrame);
-		AddInput(TEXT("NumFrames"), CD_NumFrames);
-		AddInput(TEXT("StartTime"), CD_StartTime);
-		AddInput(TEXT("PackedRate"), CD_PackedRate);
-		AddInput(TEXT("Time"), TimeExpr);
-		AddInput(TEXT("SampleRate"), SampleRateParam);
-
-		CustomCalc->Code = TEXT(
-			"bool bLoop = (PackedRate >= 0.0);\n"
-			"float PlayRate = max(0.0001, abs(PackedRate));\n"
-			"float ElapsedSec = max(0.0, Time - StartTime);\n"
-			"float ElapsedFrames = ElapsedSec * PlayRate * SampleRate;\n"
-			"float Length = max(1.0, NumFrames);\n"
-			"float FrameOffset = bLoop ? floor(fmod(ElapsedFrames, Length))\n"
-			"                          : min(Length - 1.0, floor(ElapsedFrames));\n"
-			"return StartFrame + FrameOffset;\n"
-		);
-		OutMasterMat->GetExpressionCollection().AddExpression(CustomCalc);
-
-		// 连接 CustomCalc 到 MF_BoneAnimation 的 Frame 引脚
-		if (BoneAnimFuncCall)
-		{
-			for (FFunctionExpressionInput& FuncInput : BoneAnimFuncCall->FunctionInputs)
-			{
-				if (FuncInput.ExpressionInput && FuncInput.ExpressionInput->InputName == TEXT("Frame"))
-				{
-					FuncInput.Input.Connect(0, CustomCalc);
-					break;
-				}
-			}
-		}
-
-		if (OutMasterMat->MaterialGraph)
-		{
-			OutMasterMat->MaterialGraph->RebuildGraph();
-		}
-		UMaterialEditingLibrary::RecompileMaterial(OutMasterMat);
-		OutMasterMat->PostEditChange();
-		OutMasterMat->MarkPackageDirty();
-		FAssetRegistryModule::AssetCreated(OutMasterMat);
-		UE_LOG(LogTemp, Log, TEXT("[CrowdLegionExporter] Successfully created plugin M_Crowd_Legion at '%s'!"), GPluginMasterMatPackage);
+		bCreatedMaster = true;
 	}
+
+	OutMasterMat->PreEditChange(nullptr);
+	ClearMaterialExpressions(OutMasterMat);
+
+	OutMasterMat->SetMaterialUsage(MATUSAGE_InstancedStaticMeshes);
+	OutMasterMat->bUseMaterialAttributes = true;
+
+	UMaterialExpressionTextureSampleParameter2D* BaseColorParam = NewObject<UMaterialExpressionTextureSampleParameter2D>(OutMasterMat);
+	BaseColorParam->ParameterName = TEXT("BaseColorTexture");
+	BaseColorParam->MaterialExpressionEditorX = -1500;
+	BaseColorParam->MaterialExpressionEditorY = -400;
+	OutMasterMat->GetExpressionCollection().AddExpression(BaseColorParam);
+
+	UMaterialExpressionScalarParameter* MetallicParam = NewObject<UMaterialExpressionScalarParameter>(OutMasterMat);
+	MetallicParam->ParameterName = TEXT("Metallic");
+	MetallicParam->DefaultValue = 0.0f;
+	MetallicParam->MaterialExpressionEditorX = -1500;
+	MetallicParam->MaterialExpressionEditorY = -150;
+	OutMasterMat->GetExpressionCollection().AddExpression(MetallicParam);
+
+	UMaterialExpressionScalarParameter* RoughnessParam = NewObject<UMaterialExpressionScalarParameter>(OutMasterMat);
+	RoughnessParam->ParameterName = TEXT("Roughness");
+	RoughnessParam->DefaultValue = 0.5f;
+	RoughnessParam->MaterialExpressionEditorX = -1500;
+	RoughnessParam->MaterialExpressionEditorY = 50;
+	OutMasterMat->GetExpressionCollection().AddExpression(RoughnessParam);
+
+	UMaterialExpressionMakeMaterialAttributes* MakeMA = NewObject<UMaterialExpressionMakeMaterialAttributes>(OutMasterMat);
+	MakeMA->MaterialExpressionEditorX = -1100;
+	MakeMA->MaterialExpressionEditorY = -200;
+	OutMasterMat->GetExpressionCollection().AddExpression(MakeMA);
+	MakeMA->BaseColor.Connect(0, BaseColorParam);
+	MakeMA->BaseColor.SetMask(1, 1, 1, 1, 0);
+	MakeMA->Metallic.Connect(0, MetallicParam);
+	MakeMA->Roughness.Connect(0, RoughnessParam);
+
+	UMaterialExpressionMaterialFunctionCall* FrameCall = AddCrowdLegionFrameCall(OutMasterMat, GetCrowdLegionFrameMF, -1100, 450);
+	if (!FrameCall)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to build GetCrowdLegionFrame network on M_Crowd_Legion."));
+		OutMasterMat->PostEditChange();
+		return false;
+	}
+
+	UMaterialExpressionMaterialFunctionCall* BoneAnimCall = NewObject<UMaterialExpressionMaterialFunctionCall>(OutMasterMat);
+	BoneAnimCall->MaterialExpressionEditorX = -500;
+	BoneAnimCall->MaterialExpressionEditorY = -100;
+	OutMasterMat->GetExpressionCollection().AddExpression(BoneAnimCall);
+	BoneAnimCall->SetMaterialFunction(OutBoneAnimMF);
+	BoneAnimCall->UpdateFromFunctionResource();
+
+	bool bConnectedAttributes = false;
+	bool bConnectedFrame = false;
+	for (FFunctionExpressionInput& FuncInput : BoneAnimCall->FunctionInputs)
+	{
+		if (!FuncInput.ExpressionInput)
+		{
+			continue;
+		}
+
+		const FName InputName = FuncInput.ExpressionInput->InputName;
+		if (InputName == TEXT("Material Attributes") || FuncInput.ExpressionInput->InputType == FunctionInput_MaterialAttributes)
+		{
+			FuncInput.Input.Connect(0, MakeMA);
+			bConnectedAttributes = true;
+		}
+		else if (InputName == TEXT("Frame"))
+		{
+			FuncInput.Input.Connect(0, FrameCall);
+			bConnectedFrame = true;
+		}
+	}
+
+	if (!bConnectedAttributes || !bConnectedFrame)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] M_Crowd_Legion failed to connect MF_CrowdLegionBoneAnimation inputs (Attributes=%d Frame=%d)."),
+			bConnectedAttributes ? 1 : 0, bConnectedFrame ? 1 : 0);
+		OutMasterMat->PostEditChange();
+		return false;
+	}
+
+	ConnectBoneAnimOutputs(OutMasterMat, BoneAnimCall);
+
+	if (OutMasterMat->MaterialGraph)
+	{
+		OutMasterMat->MaterialGraph->RebuildGraph();
+	}
+	UMaterialEditingLibrary::RecompileMaterial(OutMasterMat);
+	OutMasterMat->PostEditChange();
+	OutMasterMat->MarkPackageDirty();
+	if (bCreatedMaster)
+	{
+		FAssetRegistryModule::AssetCreated(OutMasterMat);
+	}
+	UE_LOG(LogTemp, Log, TEXT("[CrowdLegionExporter] %s M_Crowd_Legion with GetCrowdLegionFrame at '%s'."),
+		bCreatedMaster ? TEXT("Created") : TEXT("Rebuilt"), GPluginMasterMatPackage);
 
 	return (OutMasterMat != nullptr && OutBoneAnimMF != nullptr);
 }
@@ -850,4 +1248,287 @@ UDataTable* FCrowdLegionExporter::GenerateAnimMetaDataTable(UAnimToTextureDataAs
 	DataTable->MarkPackageDirty();
 	UE_LOG(LogTemp, Log, TEXT("[CrowdLegionExporter] Successfully generated animation metadata DataTable at '%s'."), *TargetPackagePath);
 	return DataTable;
+}
+
+bool FCrowdLegionExporter::EnsureArcherBoneAnimationParentMaterial(UMaterial*& OutParentMat, UMaterialFunction* BoneAnimMF)
+{
+	OutParentMat = nullptr;
+	if (!BoneAnimMF)
+	{
+		return false;
+	}
+
+	UMaterialFunction* GetCrowdLegionFrameMF = nullptr;
+	if (!EnsureGetCrowdLegionFrame(GetCrowdLegionFrameMF) || !GetCrowdLegionFrameMF)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to ensure GetCrowdLegionFrame for M_Archer_BoneAnimation."));
+		return false;
+	}
+
+	const FString ParentObjectPath = FString(GArcherBoneAnimParentPkg) + TEXT(".M_Archer_BoneAnimation");
+	OutParentMat = Cast<UMaterial>(StaticLoadObject(UMaterial::StaticClass(), nullptr, *ParentObjectPath));
+
+	bool bCreated = false;
+	if (!OutParentMat)
+	{
+		UPackage* MatPackage = CreatePackage(GArcherBoneAnimParentPkg);
+		if (!MatPackage)
+		{
+			return false;
+		}
+		MatPackage->FullyLoad();
+
+		OutParentMat = NewObject<UMaterial>(MatPackage, FName(TEXT("M_Archer_BoneAnimation")), RF_Public | RF_Standalone);
+		if (!OutParentMat)
+		{
+			return false;
+		}
+		bCreated = true;
+	}
+
+	OutParentMat->PreEditChange(nullptr);
+
+	// Rebuild graph every time so wiring matches the expected Material Attributes chain.
+	ClearMaterialExpressions(OutParentMat);
+
+	OutParentMat->SetMaterialUsage(MATUSAGE_InstancedStaticMeshes);
+	OutParentMat->bUseMaterialAttributes = true;
+
+	// TextureSample -> MakeMaterialAttributes -> MF_CrowdLegionBoneAnimation -> Material Attributes
+	// Substrate: bone MF -> ConvertMaterialAttributes -> Front Material
+	// Frame: PICD -> GetCrowdLegionFrame -> MF.Frame
+	UMaterialExpressionTextureSampleParameter2D* BaseColorParam = NewObject<UMaterialExpressionTextureSampleParameter2D>(OutParentMat);
+	BaseColorParam->ParameterName = TEXT("BaseColorTexture");
+	BaseColorParam->MaterialExpressionEditorX = -1200;
+	BaseColorParam->MaterialExpressionEditorY = 0;
+	OutParentMat->GetExpressionCollection().AddExpression(BaseColorParam);
+
+	UMaterialExpressionMakeMaterialAttributes* MakeMA = NewObject<UMaterialExpressionMakeMaterialAttributes>(OutParentMat);
+	MakeMA->MaterialExpressionEditorX = -900;
+	MakeMA->MaterialExpressionEditorY = 0;
+	OutParentMat->GetExpressionCollection().AddExpression(MakeMA);
+	MakeMA->BaseColor.Connect(0, BaseColorParam);
+	MakeMA->BaseColor.SetMask(1, 1, 1, 1, 0);
+
+	UMaterialExpressionMaterialFunctionCall* FrameCall = AddCrowdLegionFrameCall(OutParentMat, GetCrowdLegionFrameMF, -900, 400);
+	if (!FrameCall)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to build GetCrowdLegionFrame network on M_Archer_BoneAnimation."));
+		OutParentMat->PostEditChange();
+		return false;
+	}
+
+	UMaterialExpressionMaterialFunctionCall* BoneAnimCall = NewObject<UMaterialExpressionMaterialFunctionCall>(OutParentMat);
+	BoneAnimCall->MaterialExpressionEditorX = -500;
+	BoneAnimCall->MaterialExpressionEditorY = 0;
+	OutParentMat->GetExpressionCollection().AddExpression(BoneAnimCall);
+	BoneAnimCall->SetMaterialFunction(BoneAnimMF);
+	BoneAnimCall->UpdateFromFunctionResource();
+
+	bool bConnectedAttributes = false;
+	bool bConnectedFrame = false;
+	for (FFunctionExpressionInput& FuncInput : BoneAnimCall->FunctionInputs)
+	{
+		if (!FuncInput.ExpressionInput)
+		{
+			continue;
+		}
+
+		const FName InputName = FuncInput.ExpressionInput->InputName;
+		if (InputName == TEXT("Material Attributes") || FuncInput.ExpressionInput->InputType == FunctionInput_MaterialAttributes)
+		{
+			FuncInput.Input.Connect(0, MakeMA);
+			bConnectedAttributes = true;
+		}
+		else if (InputName == TEXT("Frame"))
+		{
+			FuncInput.Input.Connect(0, FrameCall);
+			bConnectedFrame = true;
+		}
+	}
+
+	if (!bConnectedAttributes || !bConnectedFrame)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] M_Archer_BoneAnimation failed to connect MF_CrowdLegionBoneAnimation inputs (Attributes=%d Frame=%d)."),
+			bConnectedAttributes ? 1 : 0, bConnectedFrame ? 1 : 0);
+		OutParentMat->PostEditChange();
+		return false;
+	}
+
+	ConnectBoneAnimOutputs(OutParentMat, BoneAnimCall);
+
+	if (OutParentMat->MaterialGraph)
+	{
+		OutParentMat->MaterialGraph->RebuildGraph();
+	}
+	UMaterialEditingLibrary::RecompileMaterial(OutParentMat);
+	OutParentMat->PostEditChange();
+	OutParentMat->MarkPackageDirty();
+	if (bCreated)
+	{
+		FAssetRegistryModule::AssetCreated(OutParentMat);
+	}
+	UE_LOG(LogTemp, Log, TEXT("[CrowdLegionExporter] %s M_Archer_BoneAnimation with Material Attributes chain at '%s'."),
+		bCreated ? TEXT("Created") : TEXT("Rebuilt"), GArcherBoneAnimParentPkg);
+	return true;
+}
+
+bool FCrowdLegionExporter::EnsureArcherBoneAnimationMaterialInstances(UMaterial* ParentMat)
+{
+	if (!ParentMat)
+	{
+		return false;
+	}
+
+	struct FArcherMiDesc
+	{
+		const TCHAR* AssetName;
+		const TCHAR* TexturePath;
+	};
+
+	const FArcherMiDesc Descs[] = {
+		{ TEXT("MI_Archer_BoneAnimation_Color"), GTexSoldierColor },
+		{ TEXT("MI_Archer_BoneAnimation_Color_2"), GTexSoldierColor2 },
+		{ TEXT("MI_Archer_BoneAnimation_Color_4"), GTexSoldierColor4 },
+	};
+
+	for (const FArcherMiDesc& Desc : Descs)
+	{
+		const FString PackagePath = FString(GArcherBoneAnimDir) / Desc.AssetName;
+		const FString ObjectPath = PackagePath + TEXT(".") + Desc.AssetName;
+
+		UTexture2D* BaseColorTex = Cast<UTexture2D>(StaticLoadObject(UTexture2D::StaticClass(), nullptr, Desc.TexturePath));
+		if (!BaseColorTex)
+		{
+			UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Missing BaseColor texture: %s"), Desc.TexturePath);
+			return false;
+		}
+
+		UMaterialInstanceConstant* MIC = Cast<UMaterialInstanceConstant>(StaticLoadObject(UMaterialInstanceConstant::StaticClass(), nullptr, *ObjectPath));
+		const bool bCreated = (MIC == nullptr);
+		if (!MIC)
+		{
+			UPackage* MatPackage = CreatePackage(*PackagePath);
+			if (!MatPackage)
+			{
+				return false;
+			}
+			MatPackage->FullyLoad();
+			MIC = NewObject<UMaterialInstanceConstant>(MatPackage, FName(Desc.AssetName), RF_Public | RF_Standalone);
+			if (!MIC)
+			{
+				return false;
+			}
+		}
+
+		MIC->SetParentEditorOnly(ParentMat);
+		MIC->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(TEXT("BaseColorTexture")), BaseColorTex);
+		UMaterialEditingLibrary::UpdateMaterialInstance(MIC);
+		MIC->PostEditChange();
+		MIC->MarkPackageDirty();
+		if (bCreated)
+		{
+			FAssetRegistryModule::AssetCreated(MIC);
+		}
+		UE_LOG(LogTemp, Log, TEXT("[CrowdLegionExporter] %s Archer MI '%s' with texture '%s'."),
+			bCreated ? TEXT("Created") : TEXT("Updated"), Desc.AssetName, *BaseColorTex->GetName());
+	}
+
+	return true;
+}
+
+void FCrowdLegionExporter::ExecuteGenerateArcherBoneAnimationMaterials()
+{
+	auto Notify = [](const FString& Message, bool bError)
+	{
+		if (bError)
+		{
+			UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] %s"), *Message);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Log, TEXT("[CrowdLegionExporter] %s"), *Message);
+		}
+		if (!FApp::IsUnattended())
+		{
+			FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Message));
+		}
+	};
+
+	UMaterial* UnusedCrowdMaster = nullptr;
+	UMaterialFunction* BoneMF = nullptr;
+	if (!EnsurePluginMasterMaterials(UnusedCrowdMaster, BoneMF) || !BoneMF)
+	{
+		Notify(TEXT("无法准备 MF_CrowdLegionBoneAnimation。请确认 AnimToTexture 插件已启用。"), true);
+		return;
+	}
+
+	// Persist plugin masters. Archer-only save below does not write these packages,
+	// and -unattended -Quit discards dirty packages that were never saved.
+	{
+		TArray<UPackage*> PluginPackages;
+		auto AddPkg = [&PluginPackages](UObject* Obj)
+		{
+			if (Obj)
+			{
+				if (UPackage* Pkg = Obj->GetOutermost())
+				{
+					PluginPackages.AddUnique(Pkg);
+				}
+			}
+		};
+		AddPkg(UnusedCrowdMaster);
+		AddPkg(BoneMF);
+		if (UMaterialFunction* FrameFn = Cast<UMaterialFunction>(StaticLoadObject(
+			UMaterialFunction::StaticClass(), nullptr,
+			TEXT("/VgCrowdLegion/Materials/GetCrowdLegionFrame.GetCrowdLegionFrame"))))
+		{
+			AddPkg(FrameFn);
+		}
+		if (PluginPackages.Num() > 0)
+		{
+			UEditorLoadingAndSavingUtils::SavePackages(PluginPackages, true);
+		}
+	}
+
+	UMaterial* Parent = nullptr;
+	if (!EnsureArcherBoneAnimationParentMaterial(Parent, BoneMF) || !Parent)
+	{
+		Notify(TEXT("创建 M_Archer_BoneAnimation 失败。"), true);
+		return;
+	}
+
+	if (!EnsureArcherBoneAnimationMaterialInstances(Parent))
+	{
+		Notify(TEXT("创建 Archer BoneAnimation MI 失败（请检查 T_Soldier_C_Color / _2 / _4 是否存在）。"), true);
+		return;
+	}
+
+	TArray<UPackage*> PackagesToSave;
+	if (UPackage* ParentPkg = Parent->GetOutermost())
+	{
+		PackagesToSave.AddUnique(ParentPkg);
+	}
+	const TCHAR* MiNames[] = {
+		TEXT("MI_Archer_BoneAnimation_Color"),
+		TEXT("MI_Archer_BoneAnimation_Color_2"),
+		TEXT("MI_Archer_BoneAnimation_Color_4"),
+	};
+	for (const TCHAR* MiName : MiNames)
+	{
+		const FString ObjectPath = FString(GArcherBoneAnimDir) / MiName + TEXT(".") + MiName;
+		if (UObject* MiObj = StaticLoadObject(UObject::StaticClass(), nullptr, *ObjectPath))
+		{
+			if (UPackage* Pkg = MiObj->GetOutermost())
+			{
+				PackagesToSave.AddUnique(Pkg);
+			}
+		}
+	}
+	if (PackagesToSave.Num() > 0)
+	{
+		UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, true);
+	}
+
+	Notify(TEXT("已生成/更新:\n/Game/CrowdLegion/Characters/Archer/Materials/BoneAnimation/\n- M_Archer_BoneAnimation\n- MI_Archer_BoneAnimation_Color\n- MI_Archer_BoneAnimation_Color_2\n- MI_Archer_BoneAnimation_Color_4"), false);
 }
