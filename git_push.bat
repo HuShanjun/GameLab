@@ -155,7 +155,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-cmd /c git commit -F "%MSGFILE%" ^<nul
+cmd /c git commit --allow-empty -F "%MSGFILE%" ^<nul
 if errorlevel 1 (
   echo [ERROR] git commit failed. Tip: git reflog to recover pre-reset HEAD.
   del "%MSGFILE%" >nul 2>&1
