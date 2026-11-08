@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "unreal-engine": {
+      "url": "http://127.0.0.1:3000/mcp",
+      "headers": {
+        "X-MCP-Capability-Token": "<从 Saved/MCP 复制 token，勿提交此文件的真实副本>"
+      }
+    }
+  }
+}

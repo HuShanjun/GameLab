@@ -1,0 +1,20 @@
+---
+description: Client 与插件的 UE5 C++ / UBT 约定
+globs: "**/*.{h,hpp,cpp,c,cc,Build.cs,Target.cs}"
+alwaysApply: false
+---
+
+# UE C++
+
+- 游戏/插件代码优先用 Unreal 类型（`TArray`、`TObjectPtr`、`FString`、`FName`），少用 STL。
+- 反射宏写对：`UCLASS` / `USTRUCT` / `UENUM` + `GENERATED_BODY()`；新增反射 API 须先编过 Editor，蓝图才能看到。
+- 命名：`U` / `A` / `F` / `E` / `I` 前缀；模块名与目录 / `*.Build.cs` 一致。
+- 只把稳定、已文档化的接口暴露给蓝图（`BlueprintCallable` / `BlueprintPure` / 谨慎的 `BlueprintReadWrite`）。关键运行时状态优先 `BlueprintReadOnly` + 带校验的 Setter。
+- 插件模块区分 Runtime 与 Editor：仅编辑器代码放 `*Editor` 模块（如 `VgCrowdLegionEditor`）。
+- 改 `*.Build.cs` / 模块依赖后要重新生成工程或完整编译；不要假设 Live Coding 覆盖 Build.cs。
+- 日志用模块内已有的 `UE_LOG` 分类；禁止 `std::cout`。
+
+```cpp
+// ❌ 坏：玩法逻辑塞进 Editor 模块；关键运行时状态对蓝图随意可写
+// ✅ 好：Runtime 组件 + 窄 UFUNCTION API；带校验的 Setter
+```

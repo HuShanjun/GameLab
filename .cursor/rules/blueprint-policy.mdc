@@ -1,0 +1,14 @@
+---
+description: 蓝图 / C++ / Docs 职责边界；禁止把 uasset 当源码
+alwaysApply: true
+---
+
+# 蓝图与资产策略
+
+- **禁止**把 `.uasset` / `.umap` 当文本打开、补丁或「重写」。用 Unreal 编辑器，或编辑器运行中的 UE MCP。
+- 蓝图负责装配、调参、关卡流程和薄胶水；性能关键 / Bake / Crowd-VAT 逻辑放 C++。
+- 复杂材质或蓝图图，非琐碎改动前后都要在 `Docs/` 有 Markdown 镜像；把 Docs 当 Agent 可读源。
+- 有 MCP 时：优先 Compile + PIE 截图验收，不要猜图状态。
+- 无 MCP 时：在 `Docs/` 或回复里写清拟改的节点/参数；二进制改动留给人做。
+- 新玩法资产优先 `/Game/Game/...`（`Client/Content/Game/`）。不要把要出货的内容放进 `/Game/Editor` 或 `/Game/Developer`。
+- Content 提交说明必须点名资产与意图；二进制 diff 本身不可读。

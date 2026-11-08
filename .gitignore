@@ -46,3 +46,6 @@ Client/Plugins/Development/VgCrowdLegion/Content/Materials/*
 !Client/Plugins/Development/VgCrowdLegion/Content/Materials/M_Crowd_Legion.uasset
 /Docs/superpowers/plans
 /.superpowers
+
+# Cursor MCP secrets (keep mcp.json.example versioned)
+.cursor/mcp.json

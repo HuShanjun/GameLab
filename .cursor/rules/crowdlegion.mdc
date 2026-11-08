@@ -1,0 +1,15 @@
+---
+description: VgCrowdLegion + AnimToTexture（A2T / BoneAnimation）约定
+globs: "Client/Plugins/Development/VgCrowdLegion/**/*,Docs/**/*A2T*,Docs/**/*Crowd*,Docs/**/*BoneAnimation*,Docs/**/*crowdlegion*"
+alwaysApply: false
+---
+
+# CrowdLegion / A2T
+
+- 插件根目录：`Client/Plugins/Development/VgCrowdLegion/`。Runtime 与 Editor 模块保持分离。
+- 依赖 Epic `AnimToTexture`。骨骼 / VAT 帧采样与实例 CustomData 必须与 GPU 布局对齐（见 `CrowdUnitComponent.h` 中 `FUnitAnimationTableRow` / PerInstanceCustomData 注释）。
+- 插件 `Content/` 大多本地保留、被 gitignore；`Content/Materials/` 下个别材质除外（见 `.gitignore`）。不要假设每台机器都有被忽略的插件 Content。
+- 工程内角色 / A2T 资产常见于 `Client/Content/CrowdLegion/` —— 重命名前先确认路径。
+- 动手前先读：`Docs/A2T材质蓝图基础逻辑分析.md`、`Docs/AnimToTexture使用文档.md`，以及相关 `Docs/superpowers/specs/*`。
+- 优先改 Bake/导出 C++（`CrowdLegionExporter`、编辑器 Actor），除非任务明确是材质 / 蓝图装配。
+- 导出器或 MI 参数契约变更后，更新 Docs，并写明哪些 DataAsset / MI 需要在编辑器里重新 Bake。
