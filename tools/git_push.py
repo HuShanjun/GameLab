@@ -38,14 +38,20 @@ def git_ok(*args: str) -> bool:
 
 def ask_yes_no(prompt: str, default: bool = False) -> bool:
     suffix = " [Y/n]: " if default else " [y/N]: "
-    raw = input(prompt + suffix).strip().lower()
+    try:
+        raw = input(prompt + suffix).strip().lower()
+    except EOFError:
+        return default
     if not raw:
         return default
     return raw in ("y", "yes")
 
 
 def ask_text(prompt: str) -> str:
-    return input(prompt).strip()
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        return ""
 
 
 def build_squash_message(title: str, subjects: Sequence[str], append: bool) -> str:
