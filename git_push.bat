@@ -2,8 +2,8 @@
 setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
 
-rem Git subprocesses use cmd /c ... so this bat keeps its own stdin
-rem (needed when invoked as: git_push.bat < answers.txt).
+rem Prompts read from CON (or GIT_PUSH_* env overrides for automation).
+rem Git runs in cmd /c so they do not consume this script's stdin.
 
 for /f "delims=" %%i in ('git rev-parse --show-toplevel 2^>nul') do set "REPO_ROOT=%%i"
 if not defined REPO_ROOT (
@@ -63,7 +63,11 @@ if "%HAS_REMOTE%"=="1" (
 echo.
 
 set "SQUASH=N"
-set /p "SQUASH=Merge into one commit before push? [y/N]: "
+if defined GIT_PUSH_SQUASH (
+  set "SQUASH=%GIT_PUSH_SQUASH%"
+) else (
+  set /p "SQUASH=Merge into one commit before push? [y/N]: " < con
+)
 if /i "%SQUASH%"=="Y" goto do_squash
 if /i "%SQUASH%"=="YES" goto do_squash
 
@@ -88,7 +92,11 @@ for /f %%i in ('cmd /c "git status --porcelain -uno <nul 2>nul"') do set "DIRTY=
 if "%DIRTY%"=="1" (
   echo [WARN] Working tree has tracked modifications.
   set "CONT=N"
-  set /p "CONT=Continue squash anyway? [y/N]: "
+  if defined GIT_PUSH_CONT (
+    set "CONT=%GIT_PUSH_CONT%"
+  ) else (
+    set /p "CONT=Continue squash anyway? [y/N]: " < con
+  )
   if /i "!CONT!"=="Y" goto dirty_ok
   if /i "!CONT!"=="YES" goto dirty_ok
   echo [INFO] Aborted.
@@ -97,7 +105,11 @@ if "%DIRTY%"=="1" (
 :dirty_ok
 
 set "TITLE="
-set /p "TITLE=Commit title (required): "
+if defined GIT_PUSH_TITLE (
+  set "TITLE=%GIT_PUSH_TITLE%"
+) else (
+  set /p "TITLE=Commit title (required): " < con
+)
 if not defined TITLE (
   echo [ERROR] Title is required.
   exit /b 1
@@ -108,7 +120,11 @@ if "!TITLE!"=="" (
 )
 
 set "APPEND=N"
-set /p "APPEND=Append numbered unpushed subjects to body? [y/N]: "
+if defined GIT_PUSH_APPEND (
+  set "APPEND=%GIT_PUSH_APPEND%"
+) else (
+  set /p "APPEND=Append numbered unpushed subjects to body? [y/N]: " < con
+)
 
 set "MSGFILE=%TEMP%\git_push_msg_%RANDOM%.txt"
 > "%MSGFILE%" echo(!TITLE!
