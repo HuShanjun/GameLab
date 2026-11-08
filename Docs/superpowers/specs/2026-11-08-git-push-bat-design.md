@@ -47,11 +47,11 @@
 ```
 用户输入的标题
 
-  1. 第一条未推送 subject（旧→新或新→旧见下）
-  2. 第二条 subject
+  1. 最早一条未推送 subject
+  2. 下一条 subject
 ```
 
-**列表顺序：** 与 `git log --reverse origin/<branch>..HEAD` 一致（时间从旧到新），便于阅读演进。
+**列表顺序：** `git log --reverse --format=%s origin/<branch>..HEAD`（从旧到新）。
 
 ## 错误与边界
 
