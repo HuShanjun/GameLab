@@ -66,19 +66,29 @@ public:
 	/** 创建或更新三个 Archer BoneAnimation 材质实例并绑定贴图 */
 	static bool EnsureArcherBoneAnimationMaterialInstances(UMaterial* ParentMat);
 
-	/** 步骤 2: 根据 SkeletalMesh 材质合并生成 2x2 Texture Atlas 大图 */
+	/** 步骤 2: 根据 SkeletalMesh 材质合并生成 2x2 Texture Atlas 大图（旧管线；一键导出不再调用） */
 	static UTexture2D* GenerateAtlasTextureFromSkelMesh(USkeletalMesh* SkelMesh, const FString& TargetPackagePath);
 
-	/** 步骤 3: 导出 StaticMesh 并将各 Section 的 UV0 重映射至 Atlas 对应象限，最后合并为 1 个插槽 */
+	/** 导出 StaticMesh，保留全部材质插槽与原始 UV（不合并插槽、不做 Atlas UV 重映射） */
+	static UStaticMesh* ExportStaticMeshFromSkeletalMesh(USkeletalMesh* SkelMesh, const FString& TargetStaticMeshPath);
+
+	/** 旧管线：导出并 UV 重映射后合并为 1 插槽（已废弃，转发到 ExportStaticMeshFromSkeletalMesh） */
 	static UStaticMesh* ExportStaticMeshWithAtlasUVRemap(USkeletalMesh* SkelMesh, const FString& TargetStaticMeshPath);
 
-	/** 步骤 4: 执行骨骼动画纹理分配与 A2T 核心烘焙 */
-	static bool BakeA2TDataAsset(UAnimToTextureDataAsset* DataAsset, UMaterial* MasterMaterial, UStaticMesh* BakedMesh, UTexture2D* AtlasTexture);
+	/** 步骤 4: A2T 烘焙，并为每个材质插槽生成/绑定 BoneAnimation MI */
+	static bool BakeA2TDataAsset(UAnimToTextureDataAsset* DataAsset, UStaticMesh* BakedMesh);
 
 	/** 步骤 5: 根据 DataAsset 动画序列生成或更新动画元数据 DataTable (FUnitAnimationTableRow) */
 	static UDataTable* GenerateAnimMetaDataTable(UAnimToTextureDataAsset* DataAsset, const FString& TargetPackagePath);
 
+	/** 在指定包路径确保 BoneAnimation 父材质（Archer 式 Material Attributes 链） */
+	static bool EnsureBoneAnimationParentMaterial(const FString& PackagePath, const FName AssetName, UMaterialFunction* BoneAnimMF, UMaterial*& OutParentMat);
+
+	/** 为 StaticMesh 各插槽创建 BoneAnimation MI 并 SetMaterial */
+	static bool ApplyBoneAnimationMaterialsToStaticMesh(UAnimToTextureDataAsset* DataAsset, UStaticMesh* BakedMesh, UMaterial* ParentMat);
+
 private:
 	static UTexture2D* FindOrCreateVATTexture(UAnimToTextureDataAsset* DataAsset, const FString& Suffix);
 	static void SyncMaterialInstanceRanges(UAnimToTextureDataAsset* DataAsset, UMaterialInstanceConstant* MatInst);
+	static UTexture2D* ExtractBaseColorTexture(UMaterialInterface* Material);
 };

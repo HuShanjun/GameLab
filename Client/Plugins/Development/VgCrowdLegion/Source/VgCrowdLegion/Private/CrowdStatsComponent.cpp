@@ -111,7 +111,7 @@ int32 UCrowdStatsComponent::GetCurrentClipFrameCount() const
 	const TArray<FCrowdCellInstanceData>& Instances = Comp->GetAllInstanceData();
 	if (Instances.Num() == 0)
 	{
-		return Anims[0].NumFrames;
+		return FMath::Max(1, Anims[0].EndFrame - Anims[0].StartFrame + 1);
 	}
 
 	TMap<int32, int32> AnimUsage;
@@ -131,7 +131,12 @@ int32 UCrowdStatsComponent::GetCurrentClipFrameCount() const
 		}
 	}
 
-	return Anims.IsValidIndex(MostPopularAnim) ? Anims[MostPopularAnim].NumFrames : 60;
+	if (!Anims.IsValidIndex(MostPopularAnim))
+	{
+		return 60;
+	}
+	const FUnitAnimationTableRow& Row = Anims[MostPopularAnim];
+	return FMath::Max(1, Row.EndFrame - Row.StartFrame + 1);
 }
 
 int32 UCrowdStatsComponent::GetAliveUnitCount() const
@@ -186,8 +191,11 @@ int32 UCrowdStatsComponent::CalculateInstanceCurrentFrame(const FCrowdCellInstan
 		if (Anims.IsValidIndex(D.AnimIndex))
 		{
 			StartFrame = static_cast<float>(Anims[D.AnimIndex].StartFrame);
-			const int32 NumFrames = FMath::Max(1, Anims[D.AnimIndex].NumFrames);
-			EndFrame = StartFrame + static_cast<float>(NumFrames - 1);
+			EndFrame = static_cast<float>(Anims[D.AnimIndex].EndFrame);
+			if (EndFrame < StartFrame)
+			{
+				EndFrame = StartFrame;
+			}
 		}
 	}
 

@@ -273,8 +273,11 @@ void UCrowdUnitComponent::PushCellCustomData(int32 Index, bool bMarkRenderStateD
 	if (Animations.IsValidIndex(D.AnimIndex))
 	{
 		StartFrame = float(Animations[D.AnimIndex].StartFrame);
-		const int32 NumFrames = FMath::Max(1, Animations[D.AnimIndex].NumFrames);
-		EndFrame = StartFrame + float(NumFrames - 1);
+		EndFrame = float(Animations[D.AnimIndex].EndFrame);
+		if (EndFrame < StartFrame)
+		{
+			EndFrame = StartFrame;
+		}
 	}
 	const float SafeRate = FMath::Max(0.0001f, FMath::Abs(D.PlayRate));
 	const float SignedRate = D.bLoop ? SafeRate : -SafeRate;

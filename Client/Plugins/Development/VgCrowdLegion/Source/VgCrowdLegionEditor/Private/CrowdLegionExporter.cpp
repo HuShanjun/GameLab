@@ -106,24 +106,20 @@ void FCrowdLegionExporter::ExecuteExportFromSelectedAsset()
 	const FString BaseDir = FPackageName::GetLongPackagePath(DataAssetPackage);
 	const FString SkelMeshName = SkelMesh->GetName();
 
-	// 3.4: 检查并确保当前插件材质目录下有 M_Crowd_Legion 和 MF_CrowdLegionBoneAnimation
-	UMaterial* MasterMaterial = nullptr;
+	// 确保 MF_CrowdLegionBoneAnimation / GetCrowdLegionFrame（BoneAnimation 父材质依赖）
+	UMaterial* UnusedCrowdMaster = nullptr;
 	UMaterialFunction* BoneAnimMF = nullptr;
-	if (!EnsurePluginMasterMaterials(MasterMaterial, BoneAnimMF))
+	if (!EnsurePluginMasterMaterials(UnusedCrowdMaster, BoneAnimMF) || !BoneAnimMF)
 	{
 		FMessageDialog::Open(
 			EAppMsgType::Ok,
-			FText::FromString(TEXT("【A2T 军团资产导出】创建或检查插件基础材质 M_Crowd_Legion 失败，请检查 Output Log。")));
+			FText::FromString(TEXT("【A2T 军团资产导出】创建或检查 MF_CrowdLegionBoneAnimation 失败，请检查 Output Log。")));
 		return;
 	}
 
-	// 3.3: 根据 SkeletalMesh 的材质合并其材质贴图生成 Atlas
-	const FString AtlasPkgPath = BaseDir / (TEXT("T_") + SkelMeshName + TEXT("_Atlas"));
-	UTexture2D* AtlasTexture = GenerateAtlasTextureFromSkelMesh(SkelMesh, AtlasPkgPath);
-
-	// 3.2: 根据里面的 SkeletalMesh 导出 StaticMesh 并执行 UV 重映射与 1 插槽合并
+	// 导出 StaticMesh：保留多材质插槽与原始 UV
 	const FString StaticMeshPkgPath = BaseDir / (TEXT("SM_") + SkelMeshName + TEXT("_A2T"));
-	UStaticMesh* BakedStaticMesh = ExportStaticMeshWithAtlasUVRemap(SkelMesh, StaticMeshPkgPath);
+	UStaticMesh* BakedStaticMesh = ExportStaticMeshFromSkeletalMesh(SkelMesh, StaticMeshPkgPath);
 	if (!BakedStaticMesh)
 	{
 		FMessageDialog::Open(
@@ -135,10 +131,10 @@ void FCrowdLegionExporter::ExecuteExportFromSelectedAsset()
 	SelectedDataAsset->StaticMesh = BakedStaticMesh;
 	SelectedDataAsset->MarkPackageDirty();
 
-	// 3.5 & 3.6: 创建材质实例、设置贴图、创建 Bone 贴图并烘焙 A2T 资产
-	const bool bBakeSuccess = BakeA2TDataAsset(SelectedDataAsset, MasterMaterial, BakedStaticMesh, AtlasTexture);
+	// A2T 烘焙 + 每槽 BoneAnimation MI
+	const bool bBakeSuccess = BakeA2TDataAsset(SelectedDataAsset, BakedStaticMesh);
 
-	// 3.7: 自动生成或更新动画元数据 DataTable (描述 AnimName, StartFrame, NumFrames, bDefaultLoop)
+	// 动画元数据 DataTable (AnimName, StartFrame, EndFrame, bDefaultLoop)
 	const FString TablePkgPath = BaseDir / (TEXT("DT_") + SkelMeshName + TEXT("_AnimMeta"));
 	UDataTable* AnimMetaTable = GenerateAnimMetaDataTable(SelectedDataAsset, TablePkgPath);
 
@@ -146,9 +142,11 @@ void FCrowdLegionExporter::ExecuteExportFromSelectedAsset()
 	{
 		FMessageDialog::Open(
 			EAppMsgType::Ok,
-			FText::FromString(FString::Printf(TEXT("【A2T 军团资产导出成功！】\n\n- 目标 DataAsset: %s\n- 导出 StaticMesh: %s (1 Draw Call)\n- 合并 Atlas 贴图: %s\n- 配套材质实例: MI_%s_A2T\n- 动画元数据数据表: %s\n- 骨骼纹理与动画起止帧已全自动烘焙同步完成！"),
-				*SelectedDataAsset->GetName(), *BakedStaticMesh->GetName(), AtlasTexture ? *AtlasTexture->GetName() : TEXT("None"),
-				*SelectedDataAsset->GetName(), AnimMetaTable ? *AnimMetaTable->GetName() : TEXT("None"))));
+			FText::FromString(FString::Printf(TEXT("【A2T 军团资产导出成功！】\n\n- 目标 DataAsset: %s\n- 导出 StaticMesh: %s（%d 材质插槽）\n- 每槽 BoneAnimation 材质已生成并绑定\n- 动画元数据数据表: %s\n- 骨骼纹理与动画起止帧已全自动烘焙同步完成！"),
+				*SelectedDataAsset->GetName(),
+				*BakedStaticMesh->GetName(),
+				BakedStaticMesh->GetStaticMaterials().Num(),
+				AnimMetaTable ? *AnimMetaTable->GetName() : TEXT("None"))));
 	}
 	else
 	{
@@ -953,9 +951,12 @@ UTexture2D* FCrowdLegionExporter::GenerateAtlasTextureFromSkelMesh(USkeletalMesh
 	return AtlasTex;
 }
 
-UStaticMesh* FCrowdLegionExporter::ExportStaticMeshWithAtlasUVRemap(USkeletalMesh* SkelMesh, const FString& TargetStaticMeshPath)
+UStaticMesh* FCrowdLegionExporter::ExportStaticMeshFromSkeletalMesh(USkeletalMesh* SkelMesh, const FString& TargetStaticMeshPath)
 {
-	if (!SkelMesh) return nullptr;
+	if (!SkelMesh)
+	{
+		return nullptr;
+	}
 
 	UStaticMesh* OutStaticMesh = UAnimToTextureBPLibrary::ConvertSkeletalMeshToStaticMesh(SkelMesh, TargetStaticMeshPath, 0);
 	if (!OutStaticMesh)
@@ -963,95 +964,20 @@ UStaticMesh* FCrowdLegionExporter::ExportStaticMeshWithAtlasUVRemap(USkeletalMes
 		return nullptr;
 	}
 
-	OutStaticMesh->PreEditChange(nullptr);
-
-	// 获取 MeshDescription 执行精准象限 UV0 重映射
-	FMeshDescription* MeshDesc = OutStaticMesh->GetMeshDescription(0);
-	if (!MeshDesc)
-	{
-		MeshDesc = OutStaticMesh->CreateMeshDescription(0);
-	}
-
-	if (MeshDesc)
-	{
-		FStaticMeshAttributes Attributes(*MeshDesc);
-		TVertexInstanceAttributesRef<FVector2f> VertexInstanceUVs = Attributes.GetVertexInstanceUVs();
-
-		// 遍历每个 PolygonGroupID，通过绑定的真实材质插槽名称进行精准象限分类
-		for (const FPolygonGroupID PolygonGroupID : MeshDesc->PolygonGroups().GetElementIDs())
-		{
-			const FName SlotFName = Attributes.GetPolygonGroupMaterialSlotNames()[PolygonGroupID];
-			const FString SlotName = SlotFName.ToString().ToLower();
-			const int32 ActualSlotIndex = OutStaticMesh->GetMaterialIndex(SlotFName);
-
-			FString MatName = TEXT("");
-			if (OutStaticMesh->GetStaticMaterials().IsValidIndex(ActualSlotIndex) && OutStaticMesh->GetStaticMaterials()[ActualSlotIndex].MaterialInterface)
-			{
-				MatName = OutStaticMesh->GetStaticMaterials()[ActualSlotIndex].MaterialInterface->GetName().ToLower();
-			}
-
-			// 严密分类：绝对不会将铠甲/裤子错位分配给脸部！
-			const int32 TargetQuad = ClassifyMaterialQuadrant(MatName, SlotName);
-
-			FVector2f Scale(0.5f, 0.5f);
-			FVector2f Offset(0.0f, 0.0f);
-
-			if (TargetQuad == 1)
-			{
-				// 象限 1: 衣服 / 铠甲 / 裤子 (右上角)
-				Offset = FVector2f(0.5f, 0.0f);
-			}
-			else if (TargetQuad == 2)
-			{
-				// 象限 2: 武器 / 配件 (左下角)
-				Offset = FVector2f(0.0f, 0.5f);
-			}
-			else
-			{
-				// 象限 0: 身体 / 皮肤 / 脸部 (左上角)
-				Offset = FVector2f(0.0f, 0.0f);
-			}
-
-			for (const FTriangleID TriangleID : MeshDesc->GetPolygonGroupTriangles(PolygonGroupID))
-			{
-				for (const FVertexInstanceID VertInstID : MeshDesc->GetTriangleVertexInstances(TriangleID))
-				{
-					FVector2f UV = VertexInstanceUVs.Get(VertInstID, 0);
-					UV = UV * Scale + Offset;
-					VertexInstanceUVs.Set(VertInstID, 0, UV);
-				}
-			}
-		}
-
-		OutStaticMesh->CommitMeshDescription(0);
-	}
-
-	// 压缩所有 Sections 为单一材质插槽 (1 Draw Call)
-	const int32 NumLODs = OutStaticMesh->GetNumLODs();
-	for (int32 LODIdx = 0; LODIdx < NumLODs; ++LODIdx)
-	{
-		const int32 NumSections = OutStaticMesh->GetNumSections(LODIdx);
-		for (int32 SectionIdx = 0; SectionIdx < NumSections; ++SectionIdx)
-		{
-			FMeshSectionInfo SectionInfo = OutStaticMesh->GetSectionInfoMap().Get(LODIdx, SectionIdx);
-			SectionInfo.MaterialIndex = 0;
-			OutStaticMesh->GetSectionInfoMap().Set(LODIdx, SectionIdx, SectionInfo);
-		}
-	}
-	OutStaticMesh->GetOriginalSectionInfoMap().CopyFrom(OutStaticMesh->GetSectionInfoMap());
-
-	TArray<FStaticMaterial>& StaticMaterials = OutStaticMesh->GetStaticMaterials();
-	if (StaticMaterials.Num() > 1)
-	{
-		StaticMaterials.SetNum(1);
-	}
-
+	// Keep all material slots and original UVs — no atlas quadrant remap / slot collapse.
 	OutStaticMesh->Build();
 	OutStaticMesh->PostEditChange();
 	OutStaticMesh->MarkPackageDirty();
 	FAssetRegistryModule::AssetCreated(OutStaticMesh);
-
+	UE_LOG(LogTemp, Log, TEXT("[CrowdLegionExporter] Exported StaticMesh '%s' with %d material slot(s)."),
+		*TargetStaticMeshPath, OutStaticMesh->GetStaticMaterials().Num());
 	return OutStaticMesh;
+}
+
+UStaticMesh* FCrowdLegionExporter::ExportStaticMeshWithAtlasUVRemap(USkeletalMesh* SkelMesh, const FString& TargetStaticMeshPath)
+{
+	UE_LOG(LogTemp, Warning, TEXT("[CrowdLegionExporter] ExportStaticMeshWithAtlasUVRemap is deprecated; exporting without atlas UV merge."));
+	return ExportStaticMeshFromSkeletalMesh(SkelMesh, TargetStaticMeshPath);
 }
 
 UTexture2D* FCrowdLegionExporter::FindOrCreateVATTexture(UAnimToTextureDataAsset* DataAsset, const FString& Suffix)
@@ -1086,11 +1012,268 @@ void FCrowdLegionExporter::SyncMaterialInstanceRanges(UAnimToTextureDataAsset* D
 	if (!DataAsset || !MatInst) return;
 }
 
-bool FCrowdLegionExporter::BakeA2TDataAsset(UAnimToTextureDataAsset* DataAsset, UMaterial* MasterMaterial, UStaticMesh* BakedMesh, UTexture2D* AtlasTexture)
+UTexture2D* FCrowdLegionExporter::ExtractBaseColorTexture(UMaterialInterface* Material)
 {
-	if (!DataAsset || !MasterMaterial || !BakedMesh) return false;
+	if (!Material)
+	{
+		return nullptr;
+	}
 
-	// 1. 自动补全创建 Bone Pos, Rot, Weight 贴图
+	static const FName CandidateNames[] = {
+		TEXT("BaseColorTexture"),
+		TEXT("BaseColor"),
+		TEXT("Diffuse"),
+		TEXT("Albedo"),
+		TEXT("Color"),
+	};
+
+	for (const FName& ParamName : CandidateNames)
+	{
+		UTexture* Found = nullptr;
+		if (Material->GetTextureParameterValue(FMaterialParameterInfo(ParamName), Found) && Found)
+		{
+			if (UTexture2D* As2D = Cast<UTexture2D>(Found))
+			{
+				return As2D;
+			}
+		}
+	}
+	return nullptr;
+}
+
+bool FCrowdLegionExporter::EnsureBoneAnimationParentMaterial(const FString& PackagePath, const FName AssetName, UMaterialFunction* BoneAnimMF, UMaterial*& OutParentMat)
+{
+	OutParentMat = nullptr;
+	if (!BoneAnimMF || PackagePath.IsEmpty() || AssetName.IsNone())
+	{
+		return false;
+	}
+
+	UMaterialFunction* GetCrowdLegionFrameMF = nullptr;
+	if (!EnsureGetCrowdLegionFrame(GetCrowdLegionFrameMF) || !GetCrowdLegionFrameMF)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to ensure GetCrowdLegionFrame for '%s'."), *AssetName.ToString());
+		return false;
+	}
+
+	const FString ObjectPath = PackagePath + TEXT(".") + AssetName.ToString();
+	OutParentMat = Cast<UMaterial>(StaticLoadObject(UMaterial::StaticClass(), nullptr, *ObjectPath));
+
+	bool bCreated = false;
+	if (!OutParentMat)
+	{
+		UPackage* MatPackage = CreatePackage(*PackagePath);
+		if (!MatPackage)
+		{
+			return false;
+		}
+		MatPackage->FullyLoad();
+		OutParentMat = NewObject<UMaterial>(MatPackage, AssetName, RF_Public | RF_Standalone);
+		if (!OutParentMat)
+		{
+			return false;
+		}
+		bCreated = true;
+	}
+
+	OutParentMat->PreEditChange(nullptr);
+	ClearMaterialExpressions(OutParentMat);
+	OutParentMat->SetMaterialUsage(MATUSAGE_InstancedStaticMeshes);
+	OutParentMat->bUseMaterialAttributes = true;
+
+	UMaterialExpressionTextureSampleParameter2D* BaseColorParam = NewObject<UMaterialExpressionTextureSampleParameter2D>(OutParentMat);
+	BaseColorParam->ParameterName = TEXT("BaseColorTexture");
+	BaseColorParam->MaterialExpressionEditorX = -1200;
+	BaseColorParam->MaterialExpressionEditorY = 0;
+	OutParentMat->GetExpressionCollection().AddExpression(BaseColorParam);
+
+	UMaterialExpressionMakeMaterialAttributes* MakeMA = NewObject<UMaterialExpressionMakeMaterialAttributes>(OutParentMat);
+	MakeMA->MaterialExpressionEditorX = -900;
+	MakeMA->MaterialExpressionEditorY = 0;
+	OutParentMat->GetExpressionCollection().AddExpression(MakeMA);
+	MakeMA->BaseColor.Connect(0, BaseColorParam);
+	MakeMA->BaseColor.SetMask(1, 1, 1, 1, 0);
+
+	UMaterialExpressionMaterialFunctionCall* FrameCall = AddCrowdLegionFrameCall(OutParentMat, GetCrowdLegionFrameMF, -900, 400);
+	if (!FrameCall)
+	{
+		OutParentMat->PostEditChange();
+		return false;
+	}
+
+	UMaterialExpressionMaterialFunctionCall* BoneAnimCall = NewObject<UMaterialExpressionMaterialFunctionCall>(OutParentMat);
+	BoneAnimCall->MaterialExpressionEditorX = -500;
+	BoneAnimCall->MaterialExpressionEditorY = 0;
+	OutParentMat->GetExpressionCollection().AddExpression(BoneAnimCall);
+	BoneAnimCall->SetMaterialFunction(BoneAnimMF);
+	BoneAnimCall->UpdateFromFunctionResource();
+
+	bool bConnectedAttributes = false;
+	bool bConnectedFrame = false;
+	for (FFunctionExpressionInput& FuncInput : BoneAnimCall->FunctionInputs)
+	{
+		if (!FuncInput.ExpressionInput)
+		{
+			continue;
+		}
+		const FName InputName = FuncInput.ExpressionInput->InputName;
+		if (InputName == TEXT("Material Attributes") || FuncInput.ExpressionInput->InputType == FunctionInput_MaterialAttributes)
+		{
+			FuncInput.Input.Connect(0, MakeMA);
+			bConnectedAttributes = true;
+		}
+		else if (InputName == TEXT("Frame"))
+		{
+			FuncInput.Input.Connect(0, FrameCall);
+			bConnectedFrame = true;
+		}
+	}
+
+	if (!bConnectedAttributes || !bConnectedFrame)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] BoneAnimation parent '%s' failed MF inputs (Attributes=%d Frame=%d)."),
+			*AssetName.ToString(), bConnectedAttributes ? 1 : 0, bConnectedFrame ? 1 : 0);
+		OutParentMat->PostEditChange();
+		return false;
+	}
+
+	ConnectBoneAnimOutputs(OutParentMat, BoneAnimCall);
+	if (OutParentMat->MaterialGraph)
+	{
+		OutParentMat->MaterialGraph->RebuildGraph();
+	}
+	UMaterialEditingLibrary::RecompileMaterial(OutParentMat);
+	OutParentMat->PostEditChange();
+	OutParentMat->MarkPackageDirty();
+	if (bCreated)
+	{
+		FAssetRegistryModule::AssetCreated(OutParentMat);
+	}
+	UE_LOG(LogTemp, Log, TEXT("[CrowdLegionExporter] %s BoneAnimation parent '%s'."),
+		bCreated ? TEXT("Created") : TEXT("Rebuilt"), *PackagePath);
+	return true;
+}
+
+bool FCrowdLegionExporter::ApplyBoneAnimationMaterialsToStaticMesh(UAnimToTextureDataAsset* DataAsset, UStaticMesh* BakedMesh, UMaterial* ParentMat)
+{
+	if (!DataAsset || !BakedMesh || !ParentMat)
+	{
+		return false;
+	}
+
+	const FString BaseDir = FPackageName::GetLongPackagePath(DataAsset->GetOutermost()->GetName());
+	const FString BoneAnimDir = BaseDir / TEXT("Materials") / TEXT("BoneAnimation");
+	const FString MeshName = BakedMesh->GetName();
+	const TArray<FStaticMaterial>& Slots = BakedMesh->GetStaticMaterials();
+
+	// Same source material asset => one shared BoneAnimation MI for all slots that use it.
+	TMap<FSoftObjectPath, UMaterialInstanceConstant*> SourceMatToMIC;
+
+	for (int32 SlotIndex = 0; SlotIndex < Slots.Num(); ++SlotIndex)
+	{
+		UMaterialInterface* SourceMat = Slots[SlotIndex].MaterialInterface;
+		const FSoftObjectPath SourceKey = SourceMat ? FSoftObjectPath(SourceMat) : FSoftObjectPath();
+
+		if (UMaterialInstanceConstant** ExistingMIC = SourceMatToMIC.Find(SourceKey))
+		{
+			BakedMesh->SetMaterial(SlotIndex, *ExistingMIC);
+			UE_LOG(LogTemp, Log, TEXT("[CrowdLegionExporter] Slot %d reuses MI '%s' (same source material)."),
+				SlotIndex, *(*ExistingMIC)->GetName());
+			continue;
+		}
+
+		UTexture2D* BaseColorTex = ExtractBaseColorTexture(SourceMat);
+		const FString SourceMatName = SourceMat ? SourceMat->GetName() : TEXT("None");
+		FString MiName = FString::Printf(TEXT("MI_%s_BoneAnimation_%s"), *MeshName, *SourceMatName);
+		FString MiPackagePath = BoneAnimDir / MiName;
+		FString MiObjectPath = MiPackagePath + TEXT(".") + MiName;
+
+		for (const TPair<FSoftObjectPath, UMaterialInstanceConstant*>& Pair : SourceMatToMIC)
+		{
+			if (Pair.Value && Pair.Key != SourceKey && Pair.Value->GetPathName() == MiObjectPath)
+			{
+				MiName = FString::Printf(TEXT("MI_%s_BoneAnimation_%s_%d"), *MeshName, *SourceMatName, SlotIndex);
+				MiPackagePath = BoneAnimDir / MiName;
+				MiObjectPath = MiPackagePath + TEXT(".") + MiName;
+				break;
+			}
+		}
+
+		UMaterialInstanceConstant* MIC = Cast<UMaterialInstanceConstant>(StaticLoadObject(UMaterialInstanceConstant::StaticClass(), nullptr, *MiObjectPath));
+		const bool bCreated = (MIC == nullptr);
+		if (!MIC)
+		{
+			UPackage* MatPackage = CreatePackage(*MiPackagePath);
+			if (!MatPackage)
+			{
+				return false;
+			}
+			MatPackage->FullyLoad();
+			MIC = NewObject<UMaterialInstanceConstant>(MatPackage, FName(*MiName), RF_Public | RF_Standalone);
+			if (!MIC)
+			{
+				return false;
+			}
+		}
+
+		MIC->SetParentEditorOnly(ParentMat);
+		if (BaseColorTex)
+		{
+			MIC->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(TEXT("BaseColorTexture")), BaseColorTex);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[CrowdLegionExporter] Slot %d ('%s') has no BaseColor texture; MI created without override."),
+				SlotIndex, *SourceMatName);
+		}
+
+		UAnimToTextureBPLibrary::UpdateMaterialInstanceFromDataAsset(DataAsset, MIC, EMaterialParameterAssociation::GlobalParameter);
+		SyncMaterialInstanceRanges(DataAsset, MIC);
+		UMaterialEditingLibrary::UpdateMaterialInstance(MIC);
+		MIC->PostEditChange();
+		MIC->MarkPackageDirty();
+		if (bCreated)
+		{
+			FAssetRegistryModule::AssetCreated(MIC);
+		}
+
+		SourceMatToMIC.Add(SourceKey, MIC);
+		BakedMesh->SetMaterial(SlotIndex, MIC);
+		UE_LOG(LogTemp, Log, TEXT("[CrowdLegionExporter] %s slot %d MI '%s' for source '%s'."),
+			bCreated ? TEXT("Created") : TEXT("Updated"), SlotIndex, *MiName, *SourceMatName);
+	}
+
+	BakedMesh->PostEditChange();
+	BakedMesh->MarkPackageDirty();
+	return Slots.Num() > 0;
+}
+
+bool FCrowdLegionExporter::BakeA2TDataAsset(UAnimToTextureDataAsset* DataAsset, UStaticMesh* BakedMesh)
+{
+	if (!DataAsset || !BakedMesh)
+	{
+		return false;
+	}
+
+	UMaterial* UnusedCrowdMaster = nullptr;
+	UMaterialFunction* BoneAnimMF = nullptr;
+	if (!EnsurePluginMasterMaterials(UnusedCrowdMaster, BoneAnimMF) || !BoneAnimMF)
+	{
+		return false;
+	}
+
+	const FString BaseDir = FPackageName::GetLongPackagePath(DataAsset->GetOutermost()->GetName());
+	const FString MeshName = DataAsset->GetSkeletalMesh() ? DataAsset->GetSkeletalMesh()->GetName() : BakedMesh->GetName();
+	const FString ParentAssetName = FString::Printf(TEXT("M_%s_BoneAnimation"), *MeshName);
+	const FString ParentPackagePath = BaseDir / TEXT("Materials") / TEXT("BoneAnimation") / ParentAssetName;
+
+	UMaterial* ParentMat = nullptr;
+	if (!EnsureBoneAnimationParentMaterial(ParentPackagePath, FName(*ParentAssetName), BoneAnimMF, ParentMat) || !ParentMat)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to ensure BoneAnimation parent for bake."));
+		return false;
+	}
+
 	if (DataAsset->Mode == EAnimToTextureMode::Bone)
 	{
 		if (!DataAsset->GetBonePositionTexture())
@@ -1108,58 +1291,16 @@ bool FCrowdLegionExporter::BakeA2TDataAsset(UAnimToTextureDataAsset* DataAsset, 
 	}
 	DataAsset->MarkPackageDirty();
 
-	// 2. 执行核心 A2T 烘焙
 	const bool bBakeSuccess = UAnimToTextureBPLibrary::AnimationToTexture(DataAsset);
 	if (!bBakeSuccess)
 	{
 		return false;
 	}
 
-	// 3. 创建材质实例并绑定
-	const FString DataAssetPath = DataAsset->GetOutermost()->GetName();
-	const FString MatPackageName = DataAssetPath + TEXT("_MatInst");
-	const FString MatAssetName = FPaths::GetBaseFilename(MatPackageName);
-
-	UPackage* MatPackage = CreatePackage(*MatPackageName);
-	if (!MatPackage) return false;
-	MatPackage->FullyLoad();
-
-	UMaterialInstanceConstant* MatInst = FindObject<UMaterialInstanceConstant>(MatPackage, *MatAssetName);
-	if (!MatInst)
+	if (!ApplyBoneAnimationMaterialsToStaticMesh(DataAsset, BakedMesh, ParentMat))
 	{
-		MatInst = NewObject<UMaterialInstanceConstant>(MatPackage, FName(*MatAssetName), RF_Public | RF_Standalone);
-		if (MatInst)
-		{
-			MatInst->SetParentEditorOnly(MasterMaterial);
-			FAssetRegistryModule::AssetCreated(MatInst);
-		}
-	}
-	else if (MatInst->Parent != MasterMaterial)
-	{
-		MatInst->SetParentEditorOnly(MasterMaterial);
-	}
-
-	if (MatInst)
-	{
-		// 官方库同步骨骼贴图与尺寸
-		UAnimToTextureBPLibrary::UpdateMaterialInstanceFromDataAsset(DataAsset, MatInst, EMaterialParameterAssociation::GlobalParameter);
-
-		// 设置合并后的 Atlas 贴图
-		if (AtlasTexture)
-		{
-			MatInst->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(TEXT("BaseColorTexture")), AtlasTexture);
-		}
-
-		// 同步动画区间
-		SyncMaterialInstanceRanges(DataAsset, MatInst);
-
-		MatInst->PostEditChange();
-		MatInst->MarkPackageDirty();
-
-		// 绑定至网格体
-		BakedMesh->SetMaterial(0, MatInst);
-		BakedMesh->PostEditChange();
-		BakedMesh->MarkPackageDirty();
+		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to apply per-slot BoneAnimation materials."));
+		return false;
 	}
 
 	return true;
@@ -1180,6 +1321,7 @@ UDataTable* FCrowdLegionExporter::GenerateAnimMetaDataTable(UAnimToTextureDataAs
 
 	const FString TableAssetName = FPackageName::GetShortName(TargetPackagePath);
 	UDataTable* DataTable = FindObject<UDataTable>(TablePackage, *TableAssetName);
+	TMap<FName, bool> ExistingDefaultLoops;
 	if (!DataTable)
 	{
 		DataTable = NewObject<UDataTable>(TablePackage, FName(*TableAssetName), RF_Public | RF_Standalone);
@@ -1192,6 +1334,16 @@ UDataTable* FCrowdLegionExporter::GenerateAnimMetaDataTable(UAnimToTextureDataAs
 	else
 	{
 		DataTable->RowStruct = FUnitAnimationTableRow::StaticStruct();
+		static const FString PreserveContext(TEXT("CrowdLegionExporter::GenerateAnimMetaDataTable.PreserveLoop"));
+		TArray<FUnitAnimationTableRow*> ExistingRows;
+		DataTable->GetAllRows<FUnitAnimationTableRow>(PreserveContext, ExistingRows);
+		for (const FUnitAnimationTableRow* Existing : ExistingRows)
+		{
+			if (Existing && !Existing->AnimName.IsNone())
+			{
+				ExistingDefaultLoops.Add(Existing->AnimName, Existing->bDefaultLoop);
+			}
+		}
 		DataTable->EmptyTable();
 	}
 
@@ -1218,11 +1370,11 @@ UDataTable* FCrowdLegionExporter::GenerateAnimMetaDataTable(UAnimToTextureDataAs
 		{
 			FrameCount = SeqInfo.AnimSequence->GetNumberOfSampledKeys();
 		}
+		FrameCount = FMath::Max(1, FrameCount);
 
 		const FName SeqName = SeqInfo.AnimSequence->GetFName();
 		const FString NameStr = SeqName.ToString().ToLower();
 
-		// 默认是否循环：根据名称进行合理初始预设，美术在 DataTable 中可随时自由调整
 		bool bLoop = true;
 		if (NameStr.Contains(TEXT("death")) || NameStr.Contains(TEXT("die")) ||
 			NameStr.Contains(TEXT("attack")) || NameStr.Contains(TEXT("poke")) ||
@@ -1235,8 +1387,15 @@ UDataTable* FCrowdLegionExporter::GenerateAnimMetaDataTable(UAnimToTextureDataAs
 		FUnitAnimationTableRow Row;
 		Row.AnimName = SeqName;
 		Row.StartFrame = AccumulatedFrames;
-		Row.NumFrames = FMath::Max(1, FrameCount);
-		Row.bDefaultLoop = bLoop;
+		Row.EndFrame = AccumulatedFrames + FrameCount - 1;
+		if (const bool* ExistingLoop = ExistingDefaultLoops.Find(SeqName))
+		{
+			Row.bDefaultLoop = *ExistingLoop;
+		}
+		else
+		{
+			Row.bDefaultLoop = bLoop;
+		}
 
 		const FName RowName = *FString::Printf(TEXT("Anim_%d_%s"), i, *SeqName.ToString());
 		DataTable->AddRow(RowName, Row);
@@ -1252,125 +1411,11 @@ UDataTable* FCrowdLegionExporter::GenerateAnimMetaDataTable(UAnimToTextureDataAs
 
 bool FCrowdLegionExporter::EnsureArcherBoneAnimationParentMaterial(UMaterial*& OutParentMat, UMaterialFunction* BoneAnimMF)
 {
-	OutParentMat = nullptr;
-	if (!BoneAnimMF)
-	{
-		return false;
-	}
-
-	UMaterialFunction* GetCrowdLegionFrameMF = nullptr;
-	if (!EnsureGetCrowdLegionFrame(GetCrowdLegionFrameMF) || !GetCrowdLegionFrameMF)
-	{
-		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to ensure GetCrowdLegionFrame for M_Archer_BoneAnimation."));
-		return false;
-	}
-
-	const FString ParentObjectPath = FString(GArcherBoneAnimParentPkg) + TEXT(".M_Archer_BoneAnimation");
-	OutParentMat = Cast<UMaterial>(StaticLoadObject(UMaterial::StaticClass(), nullptr, *ParentObjectPath));
-
-	bool bCreated = false;
-	if (!OutParentMat)
-	{
-		UPackage* MatPackage = CreatePackage(GArcherBoneAnimParentPkg);
-		if (!MatPackage)
-		{
-			return false;
-		}
-		MatPackage->FullyLoad();
-
-		OutParentMat = NewObject<UMaterial>(MatPackage, FName(TEXT("M_Archer_BoneAnimation")), RF_Public | RF_Standalone);
-		if (!OutParentMat)
-		{
-			return false;
-		}
-		bCreated = true;
-	}
-
-	OutParentMat->PreEditChange(nullptr);
-
-	// Rebuild graph every time so wiring matches the expected Material Attributes chain.
-	ClearMaterialExpressions(OutParentMat);
-
-	OutParentMat->SetMaterialUsage(MATUSAGE_InstancedStaticMeshes);
-	OutParentMat->bUseMaterialAttributes = true;
-
-	// TextureSample -> MakeMaterialAttributes -> MF_CrowdLegionBoneAnimation -> Material Attributes
-	// Substrate: bone MF -> ConvertMaterialAttributes -> Front Material
-	// Frame: PICD -> GetCrowdLegionFrame -> MF.Frame
-	UMaterialExpressionTextureSampleParameter2D* BaseColorParam = NewObject<UMaterialExpressionTextureSampleParameter2D>(OutParentMat);
-	BaseColorParam->ParameterName = TEXT("BaseColorTexture");
-	BaseColorParam->MaterialExpressionEditorX = -1200;
-	BaseColorParam->MaterialExpressionEditorY = 0;
-	OutParentMat->GetExpressionCollection().AddExpression(BaseColorParam);
-
-	UMaterialExpressionMakeMaterialAttributes* MakeMA = NewObject<UMaterialExpressionMakeMaterialAttributes>(OutParentMat);
-	MakeMA->MaterialExpressionEditorX = -900;
-	MakeMA->MaterialExpressionEditorY = 0;
-	OutParentMat->GetExpressionCollection().AddExpression(MakeMA);
-	MakeMA->BaseColor.Connect(0, BaseColorParam);
-	MakeMA->BaseColor.SetMask(1, 1, 1, 1, 0);
-
-	UMaterialExpressionMaterialFunctionCall* FrameCall = AddCrowdLegionFrameCall(OutParentMat, GetCrowdLegionFrameMF, -900, 400);
-	if (!FrameCall)
-	{
-		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] Failed to build GetCrowdLegionFrame network on M_Archer_BoneAnimation."));
-		OutParentMat->PostEditChange();
-		return false;
-	}
-
-	UMaterialExpressionMaterialFunctionCall* BoneAnimCall = NewObject<UMaterialExpressionMaterialFunctionCall>(OutParentMat);
-	BoneAnimCall->MaterialExpressionEditorX = -500;
-	BoneAnimCall->MaterialExpressionEditorY = 0;
-	OutParentMat->GetExpressionCollection().AddExpression(BoneAnimCall);
-	BoneAnimCall->SetMaterialFunction(BoneAnimMF);
-	BoneAnimCall->UpdateFromFunctionResource();
-
-	bool bConnectedAttributes = false;
-	bool bConnectedFrame = false;
-	for (FFunctionExpressionInput& FuncInput : BoneAnimCall->FunctionInputs)
-	{
-		if (!FuncInput.ExpressionInput)
-		{
-			continue;
-		}
-
-		const FName InputName = FuncInput.ExpressionInput->InputName;
-		if (InputName == TEXT("Material Attributes") || FuncInput.ExpressionInput->InputType == FunctionInput_MaterialAttributes)
-		{
-			FuncInput.Input.Connect(0, MakeMA);
-			bConnectedAttributes = true;
-		}
-		else if (InputName == TEXT("Frame"))
-		{
-			FuncInput.Input.Connect(0, FrameCall);
-			bConnectedFrame = true;
-		}
-	}
-
-	if (!bConnectedAttributes || !bConnectedFrame)
-	{
-		UE_LOG(LogTemp, Error, TEXT("[CrowdLegionExporter] M_Archer_BoneAnimation failed to connect MF_CrowdLegionBoneAnimation inputs (Attributes=%d Frame=%d)."),
-			bConnectedAttributes ? 1 : 0, bConnectedFrame ? 1 : 0);
-		OutParentMat->PostEditChange();
-		return false;
-	}
-
-	ConnectBoneAnimOutputs(OutParentMat, BoneAnimCall);
-
-	if (OutParentMat->MaterialGraph)
-	{
-		OutParentMat->MaterialGraph->RebuildGraph();
-	}
-	UMaterialEditingLibrary::RecompileMaterial(OutParentMat);
-	OutParentMat->PostEditChange();
-	OutParentMat->MarkPackageDirty();
-	if (bCreated)
-	{
-		FAssetRegistryModule::AssetCreated(OutParentMat);
-	}
-	UE_LOG(LogTemp, Log, TEXT("[CrowdLegionExporter] %s M_Archer_BoneAnimation with Material Attributes chain at '%s'."),
-		bCreated ? TEXT("Created") : TEXT("Rebuilt"), GArcherBoneAnimParentPkg);
-	return true;
+	return EnsureBoneAnimationParentMaterial(
+		FString(GArcherBoneAnimParentPkg),
+		FName(TEXT("M_Archer_BoneAnimation")),
+		BoneAnimMF,
+		OutParentMat);
 }
 
 bool FCrowdLegionExporter::EnsureArcherBoneAnimationMaterialInstances(UMaterial* ParentMat)

@@ -29,9 +29,9 @@ struct VGCROWDLEGION_API FUnitAnimationTableRow : public FTableRowBase
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation")
 	int32 StartFrame = 0;
 
-	/** 动画总帧长 */
+	/** 在全局 VAT 贴图上的结束帧（含） */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation")
-	int32 NumFrames = 1;
+	int32 EndFrame = 0;
 
 	/** 是否循环播放 (true 为循环, false 为单次定格) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation")

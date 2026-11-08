@@ -76,9 +76,9 @@ void ACrowdLegionActor::ExportAndBakeA2TLegion()
 		return;
 	}
 
-	UMaterial* MasterMat = nullptr;
+	UMaterial* UnusedCrowdMaster = nullptr;
 	UMaterialFunction* BoneAnimMF = nullptr;
-	if (!FCrowdLegionExporter::EnsurePluginMasterMaterials(MasterMat, BoneAnimMF))
+	if (!FCrowdLegionExporter::EnsurePluginMasterMaterials(UnusedCrowdMaster, BoneAnimMF) || !BoneAnimMF)
 	{
 		return;
 	}
@@ -87,11 +87,8 @@ void ACrowdLegionActor::ExportAndBakeA2TLegion()
 	const FString BaseDir = FPackageName::GetLongPackagePath(DataAssetPackage);
 	const FString SkelMeshName = SkelMesh->GetName();
 
-	const FString AtlasPkgPath = BaseDir / (TEXT("T_") + SkelMeshName + TEXT("_Atlas"));
-	UTexture2D* AtlasTexture = FCrowdLegionExporter::GenerateAtlasTextureFromSkelMesh(SkelMesh, AtlasPkgPath);
-
 	const FString StaticMeshPkgPath = BaseDir / (TEXT("SM_") + SkelMeshName + TEXT("_A2T"));
-	UStaticMesh* BakedStaticMesh = FCrowdLegionExporter::ExportStaticMeshWithAtlasUVRemap(SkelMesh, StaticMeshPkgPath);
+	UStaticMesh* BakedStaticMesh = FCrowdLegionExporter::ExportStaticMeshFromSkeletalMesh(SkelMesh, StaticMeshPkgPath);
 	if (!BakedStaticMesh)
 	{
 		return;
@@ -100,13 +97,11 @@ void ACrowdLegionActor::ExportAndBakeA2TLegion()
 	TargetDataAsset->StaticMesh = BakedStaticMesh;
 	TargetDataAsset->MarkPackageDirty();
 
-	FCrowdLegionExporter::BakeA2TDataAsset(TargetDataAsset, MasterMat, BakedStaticMesh, AtlasTexture);
+	const bool bBakeSuccess = FCrowdLegionExporter::BakeA2TDataAsset(TargetDataAsset, BakedStaticMesh);
 
-	// 步骤 3.7: 生成动画元数据数据表 DataTable
 	const FString TablePkgPath = BaseDir / (TEXT("DT_") + SkelMeshName + TEXT("_AnimMeta"));
 	UDataTable* AnimMetaTable = FCrowdLegionExporter::GenerateAnimMetaDataTable(TargetDataAsset, TablePkgPath);
 
-	// 绑定至通用组件
 	if (CrowdComponent)
 	{
 		CrowdComponent->Mesh = BakedStaticMesh;
@@ -124,8 +119,11 @@ void ACrowdLegionActor::ExportAndBakeA2TLegion()
 
 	FMessageDialog::Open(
 		EAppMsgType::Ok,
-		FText::FromString(FString::Printf(TEXT("【A2T 军团资产一键导出成功！】\n\n- DataAsset: %s\n- StaticMesh: %s (1 Draw Call)\n- Atlas: %s\n- 动画数据表: %s\n- 军团组件已自动同步绑定！"),
-			*TargetDataAsset->GetName(), *BakedStaticMesh->GetName(), AtlasTexture ? *AtlasTexture->GetName() : TEXT("None"),
+		FText::FromString(FString::Printf(TEXT("【A2T 军团资产一键导出%s！】\n\n- DataAsset: %s\n- StaticMesh: %s（%d 材质插槽）\n- 每槽 BoneAnimation 材质已绑定\n- 动画数据表: %s\n- 军团组件已自动同步绑定！"),
+			bBakeSuccess ? TEXT("成功") : TEXT("部分失败"),
+			*TargetDataAsset->GetName(),
+			*BakedStaticMesh->GetName(),
+			BakedStaticMesh->GetStaticMaterials().Num(),
 			AnimMetaTable ? *AnimMetaTable->GetName() : TEXT("None"))));
 }
 
