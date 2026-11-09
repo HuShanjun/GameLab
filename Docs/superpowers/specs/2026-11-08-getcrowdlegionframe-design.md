@@ -83,6 +83,7 @@ Frame   = StartFrame + Offset
 - 同样改用 `MF_CrowdLegionBoneAnimation`
 - Frame 来自 `GetCrowdLegionFrame` + PICD（不再仅用标量 `Frame` 参数；可保留 Frame 标量仅作预览覆盖则需 Switch——本规格默认 **只用 PICD 路径**，与军团一致）
 - 链路保持：`TextureSample → MakeMaterialAttributes → MF_CrowdLegionBoneAnimation → Material Attributes / Front Material`
+- `MakeMaterialAttributes` 额外默认 Constant：Metallic `0`、Specular `0.5`、Roughness `0.5`、Normal `(0,0,1)`、Tangent `(1,0,0)`、AO `1`
 
 ## 验收
 

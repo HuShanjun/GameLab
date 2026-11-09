@@ -21,6 +21,8 @@
 #include "Materials/MaterialExpressionMaterialFunctionCall.h"
 #include "Materials/MaterialExpressionFunctionInput.h"
 #include "Materials/MaterialExpressionTextureSampleParameter2D.h"
+#include "Materials/MaterialExpressionConstant.h"
+#include "Materials/MaterialExpressionConstant3Vector.h"
 #include "Materials/MaterialExpressionMakeMaterialAttributes.h"
 #include "Materials/MaterialExpressionSubstrate.h"
 #include "Materials/MaterialExpressionFunctionOutput.h"
@@ -1093,6 +1095,49 @@ bool FCrowdLegionExporter::EnsureBoneAnimationParentMaterial(const FString& Pack
 	OutParentMat->GetExpressionCollection().AddExpression(MakeMA);
 	MakeMA->BaseColor.Connect(0, BaseColorParam);
 	MakeMA->BaseColor.SetMask(1, 1, 1, 1, 0);
+
+	// MakeMaterialAttributes 默认表面参数（与引擎 AttributeDefinitionMap 默认一致，显式接入以保证 Connected mask）
+	UMaterialExpressionConstant* MetallicConst = NewObject<UMaterialExpressionConstant>(OutParentMat);
+	MetallicConst->R = 0.0f;
+	MetallicConst->MaterialExpressionEditorX = -1200;
+	MetallicConst->MaterialExpressionEditorY = 160;
+	OutParentMat->GetExpressionCollection().AddExpression(MetallicConst);
+	MakeMA->Metallic.Connect(0, MetallicConst);
+
+	UMaterialExpressionConstant* SpecularConst = NewObject<UMaterialExpressionConstant>(OutParentMat);
+	SpecularConst->R = 0.5f;
+	SpecularConst->MaterialExpressionEditorX = -1200;
+	SpecularConst->MaterialExpressionEditorY = 240;
+	OutParentMat->GetExpressionCollection().AddExpression(SpecularConst);
+	MakeMA->Specular.Connect(0, SpecularConst);
+
+	UMaterialExpressionConstant* RoughnessConst = NewObject<UMaterialExpressionConstant>(OutParentMat);
+	RoughnessConst->R = 0.5f;
+	RoughnessConst->MaterialExpressionEditorX = -1200;
+	RoughnessConst->MaterialExpressionEditorY = 320;
+	OutParentMat->GetExpressionCollection().AddExpression(RoughnessConst);
+	MakeMA->Roughness.Connect(0, RoughnessConst);
+
+	UMaterialExpressionConstant3Vector* NormalConst = NewObject<UMaterialExpressionConstant3Vector>(OutParentMat);
+	NormalConst->Constant = FLinearColor(0.0f, 0.0f, 1.0f);
+	NormalConst->MaterialExpressionEditorX = -1200;
+	NormalConst->MaterialExpressionEditorY = 400;
+	OutParentMat->GetExpressionCollection().AddExpression(NormalConst);
+	MakeMA->Normal.Connect(0, NormalConst);
+
+	UMaterialExpressionConstant3Vector* TangentConst = NewObject<UMaterialExpressionConstant3Vector>(OutParentMat);
+	TangentConst->Constant = FLinearColor(1.0f, 0.0f, 0.0f);
+	TangentConst->MaterialExpressionEditorX = -1200;
+	TangentConst->MaterialExpressionEditorY = 520;
+	OutParentMat->GetExpressionCollection().AddExpression(TangentConst);
+	MakeMA->Tangent.Connect(0, TangentConst);
+
+	UMaterialExpressionConstant* AmbientOcclusionConst = NewObject<UMaterialExpressionConstant>(OutParentMat);
+	AmbientOcclusionConst->R = 1.0f;
+	AmbientOcclusionConst->MaterialExpressionEditorX = -1200;
+	AmbientOcclusionConst->MaterialExpressionEditorY = 640;
+	OutParentMat->GetExpressionCollection().AddExpression(AmbientOcclusionConst);
+	MakeMA->AmbientOcclusion.Connect(0, AmbientOcclusionConst);
 
 	UMaterialExpressionMaterialFunctionCall* FrameCall = AddCrowdLegionFrameCall(OutParentMat, GetCrowdLegionFrameMF, -900, 400);
 	if (!FrameCall)

@@ -49,3 +49,4 @@ Client/Plugins/Development/VgCrowdLegion/Content/Materials/*
 
 # Cursor MCP secrets (keep mcp.json.example versioned)
 .cursor/mcp.json
+/Client/CompileCommands

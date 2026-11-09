@@ -32,6 +32,8 @@ API：新增或改写为 `ExportStaticMeshFromSkeletalMesh`；旧 Atlas 路径�
 
 **父材质：** 与 Archer 一致的图——`BaseColorTexture` → `MakeMaterialAttributes` → `MF_CrowdLegionBoneAnimation`；Frame = `GetCrowdLegionFrame`（PICD + SampleRate）。可按角色包路径生成 `M_<Character>_BoneAnimation`，或复用已有 `M_Archer_BoneAnimation` 当角色为 Archer。
 
+**MakeMaterialAttributes 默认表面输入（`EnsureBoneAnimationParentMaterial` 显式 Constant 接入）：** Metallic `0.0`、Specular `0.5`、Roughness `0.5`、Normal `(0,0,1)`、Tangent `(1,0,0)`、Ambient Occlusion `1.0`。
+
 **每槽 MI：**
 
 1. 从该槽原始材质（Skel 导出前或 SM 转换后槽上材质）解析 BaseColor / 主贴图  
