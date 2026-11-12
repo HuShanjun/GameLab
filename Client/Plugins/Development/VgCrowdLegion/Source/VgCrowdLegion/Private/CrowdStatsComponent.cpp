@@ -1,7 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CrowdStatsComponent.h"
-#include "CrowdUnitComponent.h"
+#include "UnitHISMComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "Misc/App.h"
@@ -65,17 +65,17 @@ void UCrowdStatsComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 	}
 }
 
-UCrowdUnitComponent* UCrowdStatsComponent::GetValidCrowdComponent() const
+UUnitHISMComponent* UCrowdStatsComponent::GetValidUnitComponent() const
 {
-	if (CrowdUnitComponent.IsValid())
+	if (UnitComponent.IsValid())
 	{
-		return CrowdUnitComponent.Get();
+		return UnitComponent.Get();
 	}
 
 	AActor* Owner = GetOwner();
 	if (Owner)
 	{
-		return Owner->FindComponentByClass<UCrowdUnitComponent>();
+		return Owner->FindComponentByClass<UUnitHISMComponent>();
 	}
 	return nullptr;
 }
@@ -88,14 +88,14 @@ int32 UCrowdStatsComponent::GetBonesPerUnit() const
 
 int32 UCrowdStatsComponent::GetTotalEquivalentBones() const
 {
-	const UCrowdUnitComponent* Comp = GetValidCrowdComponent();
+	const UUnitHISMComponent* Comp = GetValidUnitComponent();
 	const int32 TotalUnits = Comp ? Comp->GetCellCount() : 0;
 	return TotalUnits * GetBonesPerUnit();
 }
 
 int32 UCrowdStatsComponent::GetCurrentClipFrameCount() const
 {
-	const UCrowdUnitComponent* Comp = GetValidCrowdComponent();
+	const UUnitHISMComponent* Comp = GetValidUnitComponent();
 	if (!Comp)
 	{
 		return 60;
@@ -141,7 +141,7 @@ int32 UCrowdStatsComponent::GetCurrentClipFrameCount() const
 
 int32 UCrowdStatsComponent::GetAliveUnitCount() const
 {
-	const UCrowdUnitComponent* Comp = GetValidCrowdComponent();
+	const UUnitHISMComponent* Comp = GetValidUnitComponent();
 	if (!Comp)
 	{
 		return 0;
@@ -174,14 +174,14 @@ int32 UCrowdStatsComponent::GetAliveUnitCount() const
 
 int32 UCrowdStatsComponent::GetDeadUnitCount() const
 {
-	const UCrowdUnitComponent* Comp = GetValidCrowdComponent();
+	const UUnitHISMComponent* Comp = GetValidUnitComponent();
 	const int32 Total = Comp ? Comp->GetCellCount() : 0;
 	return Total - GetAliveUnitCount();
 }
 
 int32 UCrowdStatsComponent::CalculateInstanceCurrentFrame(const FCrowdCellInstanceData& D, float CurrentTime) const
 {
-	const UCrowdUnitComponent* Comp = GetValidCrowdComponent();
+	const UUnitHISMComponent* Comp = GetValidUnitComponent();
 	float StartFrame = 0.f;
 	float EndFrame = 0.f;
 
@@ -210,7 +210,7 @@ int32 UCrowdStatsComponent::CalculateInstanceCurrentFrame(const FCrowdCellInstan
 
 int32 UCrowdStatsComponent::GetActivePoseCount() const
 {
-	const UCrowdUnitComponent* Comp = GetValidCrowdComponent();
+	const UUnitHISMComponent* Comp = GetValidUnitComponent();
 	if (!Comp)
 	{
 		return 0;
@@ -236,7 +236,7 @@ int32 UCrowdStatsComponent::GetActivePoseCount() const
 
 FText UCrowdStatsComponent::GetFormattedStatsText() const
 {
-	const UCrowdUnitComponent* Comp = GetValidCrowdComponent();
+	const UUnitHISMComponent* Comp = GetValidUnitComponent();
 	const int32 TotalUnits = Comp ? Comp->GetCellCount() : 0;
 	const int32 AliveUnits = GetAliveUnitCount();
 	const int32 DeadUnits  = TotalUnits - AliveUnits;

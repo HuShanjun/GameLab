@@ -38,7 +38,7 @@
 #include "HAL/IConsoleManager.h"
 #include "Misc/PackageName.h"
 #include "Engine/DataTable.h"
-#include "CrowdUnitComponent.h"
+#include "UnitHISMComponent.h"
 
 static FAutoConsoleCommand GConvertSkelMeshToStaticMeshCmd(
 	TEXT("CrowdLegion.ConvertSkelMeshToStaticMesh"),

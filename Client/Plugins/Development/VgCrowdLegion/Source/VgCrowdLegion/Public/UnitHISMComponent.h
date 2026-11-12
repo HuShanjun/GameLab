@@ -97,9 +97,9 @@ struct FUnitHISMLayerRuntime
 };
 
 /**
- * 多 HISM 层单元基类：层表驱动 Setup、Cell CRUD、统一相位推送 GPU
+ * 多 HISM 层单元组件：层表驱动 Setup、Cell CRUD、统一相位推送 GPU
  */
-UCLASS(Abstract, ClassGroup = (Crowd))
+UCLASS(ClassGroup = (Crowd), meta = (BlueprintSpawnableComponent))
 class VGCROWDLEGION_API UUnitHISMComponent : public UActorComponent
 {
 	GENERATED_BODY()
@@ -122,6 +122,10 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "CrowdLegion | HISM")
 	UHierarchicalInstancedStaticMeshComponent* GetHISM(int32 LayerIndex) const;
+
+	/** 兼容旧命名：等同 GetHISM(0) */
+	UFUNCTION(BlueprintPure, Category = "CrowdLegion | HISM")
+	UHierarchicalInstancedStaticMeshComponent* GetHISMCmp() const { return GetHISM(0); }
 
 	UFUNCTION(BlueprintCallable, Category = "CrowdLegion | Cell")
 	int32 AddCell(const FTransform& Transform, int32 AnimIndex = 0, float PlayRate = 1.0f, bool bLoop = true, float StartTimeOffset = 0.0f);
