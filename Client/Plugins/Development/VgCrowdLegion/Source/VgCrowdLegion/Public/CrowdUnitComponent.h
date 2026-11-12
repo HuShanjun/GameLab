@@ -53,7 +53,7 @@ struct VGCROWDLEGION_API FCrowdCellInstanceData
 {
 	GENERATED_BODY()
 
-	// CustomData 布局约定 (与 GetCrowdLegionFrame / M_Crowd_Legion PICD 下标对齐):
+	// CustomData 布局约定 (与 GetCrowdLegionFrame PICD 下标对齐):
 	// [0]=TimeOffset [1]=PlayRate(>=0 loop, <0 one-shot) [2]=StartFrame [3]=EndFrame
 	static constexpr int32 CD_TimeOffset = 0;
 	static constexpr int32 CD_PlayRate   = 1;
@@ -101,9 +101,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | Setup")
 	TObjectPtr<UStaticMesh> Mesh;
 
-	/** 配套顶点动画材质 (需包含 4 个 PerInstanceCustomData 算帧网络) */
+	/** 各材质插槽配套顶点动画材质 (需含 4 槽 PerInstanceCustomData 算帧；空则 SetupHISM 时从 Mesh 槽拷贝) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | Setup")
-	TObjectPtr<UMaterialInterface> Material;
+	TArray<TObjectPtr<UMaterialInterface>> Materials;
 
 	/** 动画元数据数据表 (描述各动画起止帧与循环属性) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | Animation")
@@ -116,9 +116,9 @@ public:
 public:
 	// --- HISM 初始化与配置 ---
 
-	/** 初始化或更新 HISM 组件渲染网格体与材质 */
+	/** 初始化或更新 HISM：按插槽写入材质列表；InMaterials 为空则保留已有 Materials，仍空则从 Mesh 槽拷贝 */
 	UFUNCTION(BlueprintCallable, Category = "CrowdLegion | Setup")
-	void SetupHISM(UStaticMesh* InMesh = nullptr, UMaterialInterface* InMaterial = nullptr, int32 PreallocateCount = 0);
+	void SetupHISM(UStaticMesh* InMesh, const TArray<UMaterialInterface*>& InMaterials, int32 PreallocateCount = 0);
 
 	/** 从指定的 DataTable 加载动画元数据表 */
 	UFUNCTION(BlueprintCallable, Category = "CrowdLegion | Animation")
@@ -192,7 +192,11 @@ public:
 	/** 只读获取已注册动画元数据数组 */
 	const TArray<FUnitAnimationTableRow>& GetRegisteredAnimations() const { return Animations; }
 
-	/** 获取底层的 HISM 组件 */
+	/** 检查指定动画是否为循环播放 */
+	UFUNCTION(BlueprintPure, Category = "CrowdLegion | Animation")
+    bool IsLoopingAnimation(int32 AnimIndex) const;
+
+        /** 获取底层的 HISM 组件 */
 	UFUNCTION(BlueprintPure, Category = "CrowdLegion | HISM")
 	UHierarchicalInstancedStaticMeshComponent* GetHISMCmp() const { return HISMCmp; }
 

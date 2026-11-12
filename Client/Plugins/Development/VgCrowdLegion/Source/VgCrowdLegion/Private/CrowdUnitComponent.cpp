@@ -28,7 +28,7 @@ UCrowdUnitComponent::UCrowdUnitComponent()
 	PrimaryComponentTick.bCanEverTick = false;
 }
 
-void UCrowdUnitComponent::SetupHISM(UStaticMesh* InMesh, UMaterialInterface* InMaterial, int32 PreallocateCount)
+void UCrowdUnitComponent::SetupHISM(UStaticMesh* InMesh, const TArray<UMaterialInterface*>& InMaterials, int32 PreallocateCount)
 {
 	AActor* Owner = GetOwner();
 	if (!Owner)
@@ -41,9 +41,24 @@ void UCrowdUnitComponent::SetupHISM(UStaticMesh* InMesh, UMaterialInterface* InM
 	{
 		Mesh = InMesh;
 	}
-	if (InMaterial)
+
+	if (InMaterials.Num() > 0)
 	{
-		Material = InMaterial;
+		Materials.Reset(InMaterials.Num());
+		for (UMaterialInterface* Mat : InMaterials)
+		{
+			Materials.Add(Mat);
+		}
+	}
+
+	if (Materials.Num() == 0 && Mesh)
+	{
+		const TArray<FStaticMaterial>& Slots = Mesh->GetStaticMaterials();
+		Materials.Reset(Slots.Num());
+		for (const FStaticMaterial& Slot : Slots)
+		{
+			Materials.Add(Slot.MaterialInterface);
+		}
 	}
 
 	if (!HISMCmp)
@@ -64,14 +79,12 @@ void UCrowdUnitComponent::SetupHISM(UStaticMesh* InMesh, UMaterialInterface* InM
 		HISMCmp->SetStaticMesh(Mesh);
 	}
 
-	if (Material)
+	for (int32 SlotIndex = 0; SlotIndex < Materials.Num(); ++SlotIndex)
 	{
-		HISMCmp->SetMaterial(0, Material);
-	}
-	else if (Mesh && Mesh->GetMaterial(0))
-	{
-		Material = Mesh->GetMaterial(0);
-		HISMCmp->SetMaterial(0, Material);
+		if (Materials[SlotIndex])
+		{
+			HISMCmp->SetMaterial(SlotIndex, Materials[SlotIndex]);
+		}
 	}
 
 	HISMCmp->SetNumCustomDataFloats(FCrowdCellInstanceData::CustomDataCount);
@@ -122,7 +135,7 @@ int32 UCrowdUnitComponent::AddCell(const FTransform& Transform, int32 AnimIndex,
 {
 	if (!HISMCmp)
 	{
-		SetupHISM(Mesh, Material);
+		SetupHISM(Mesh, TArray<UMaterialInterface*>());
 	}
 
 	if (!HISMCmp)
@@ -147,7 +160,7 @@ void UCrowdUnitComponent::BatchAddCells(const TArray<FTransform>& Transforms, in
 {
 	if (!HISMCmp)
 	{
-		SetupHISM(Mesh, Material, Transforms.Num());
+		SetupHISM(Mesh, TArray<UMaterialInterface*>(), Transforms.Num());
 	}
 
 	if (!HISMCmp || Transforms.Num() == 0)
@@ -306,6 +319,14 @@ int32 UCrowdUnitComponent::FindAnimationIndex(FName AnimName) const
 		}
 	}
 	return INDEX_NONE;
+}
+
+bool UCrowdUnitComponent::IsLoopingAnimation(int32 AnimIndex) const 
+{
+	if (Animations.IsValidIndex(AnimIndex)) {
+		return Animations[AnimIndex].bDefaultLoop;
+	}
+	return true;
 }
 
 void UCrowdUnitComponent::SetCellAnim(int32 CellIndex, int32 NewAnimIndex, float InPlayRate, bool bInLoop)

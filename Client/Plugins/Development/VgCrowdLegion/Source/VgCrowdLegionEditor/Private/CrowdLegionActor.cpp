@@ -2,6 +2,7 @@
 
 #include "CrowdLegionActor.h"
 #include "CrowdUnitComponent.h"
+#include "CavalryUnitComponent.h"
 #include "CrowdStatsComponent.h"
 #include "CrowdLegionExporter.h"
 #include "Components/SceneComponent.h"
@@ -25,6 +26,8 @@ ACrowdLegionActor::ACrowdLegionActor()
 
 	StatsComponent = CreateDefaultSubobject<UCrowdStatsComponent>(TEXT("StatsComponent"));
 	StatsComponent->CrowdUnitComponent = CrowdComponent;
+
+	CavalryComponent = CreateDefaultSubobject<UCavalryUnitComponent>(TEXT("CavalryComponent"));
 }
 
 void ACrowdLegionActor::BeginPlay()
@@ -40,6 +43,10 @@ void ACrowdLegionActor::BeginPlay()
 	if (bAutoInitOnBeginPlay)
 	{
 		SpawnLegion();
+		if (HorseMesh || HorseDataAsset || RiderMesh || RiderDataAsset)
+		{
+			SpawnCavalryLegion();
+		}
 	}
 }
 
@@ -76,9 +83,8 @@ void ACrowdLegionActor::ExportAndBakeA2TLegion()
 		return;
 	}
 
-	UMaterial* UnusedCrowdMaster = nullptr;
 	UMaterialFunction* BoneAnimMF = nullptr;
-	if (!FCrowdLegionExporter::EnsurePluginMasterMaterials(UnusedCrowdMaster, BoneAnimMF) || !BoneAnimMF)
+	if (!FCrowdLegionExporter::EnsurePluginBoneAnimationMF(BoneAnimMF) || !BoneAnimMF)
 	{
 		return;
 	}
@@ -87,7 +93,7 @@ void ACrowdLegionActor::ExportAndBakeA2TLegion()
 	const FString BaseDir = FPackageName::GetLongPackagePath(DataAssetPackage);
 	const FString SkelMeshName = SkelMesh->GetName();
 
-	const FString StaticMeshPkgPath = BaseDir / (TEXT("SM_") + SkelMeshName + TEXT("_A2T"));
+	const FString StaticMeshPkgPath = BaseDir / TEXT("Meshes") / (TEXT("SM_") + SkelMeshName + TEXT("_A2T"));
 	UStaticMesh* BakedStaticMesh = FCrowdLegionExporter::ExportStaticMeshFromSkeletalMesh(SkelMesh, StaticMeshPkgPath);
 	if (!BakedStaticMesh)
 	{
@@ -97,24 +103,37 @@ void ACrowdLegionActor::ExportAndBakeA2TLegion()
 	TargetDataAsset->StaticMesh = BakedStaticMesh;
 	TargetDataAsset->MarkPackageDirty();
 
-	const bool bBakeSuccess = FCrowdLegionExporter::BakeA2TDataAsset(TargetDataAsset, BakedStaticMesh);
+	const FString MatTargetDir = BaseDir / TEXT("Materials");
+	TArray<UMaterialInterface*> AssignedMaterials;
+	if (!FCrowdLegionExporter::GenerateAndAssignA2TMaterialsForStaticMesh(SkelMesh, BakedStaticMesh, MatTargetDir, AssignedMaterials))
+	{
+		return;
+	}
 
+	const bool bBakeSuccess = FCrowdLegionExporter::BakeA2TDataAsset(TargetDataAsset, BakedStaticMesh);
 	const FString TablePkgPath = BaseDir / (TEXT("DT_") + SkelMeshName + TEXT("_AnimMeta"));
 	UDataTable* AnimMetaTable = FCrowdLegionExporter::GenerateAnimMetaDataTable(TargetDataAsset, TablePkgPath);
 
 	if (CrowdComponent)
 	{
 		CrowdComponent->Mesh = BakedStaticMesh;
-		if (BakedStaticMesh->GetMaterial(0))
+		CrowdComponent->Materials.Reset();
+		const int32 NumSlots = BakedStaticMesh->GetStaticMaterials().Num();
+		CrowdComponent->Materials.Reserve(NumSlots);
+		TArray<UMaterialInterface*> SlotMats;
+		SlotMats.Reserve(NumSlots);
+		for (int32 SlotIndex = 0; SlotIndex < NumSlots; ++SlotIndex)
 		{
-			CrowdComponent->Material = BakedStaticMesh->GetMaterial(0);
+			UMaterialInterface* SlotMat = BakedStaticMesh->GetMaterial(SlotIndex);
+			CrowdComponent->Materials.Add(SlotMat);
+			SlotMats.Add(SlotMat);
 		}
 		if (AnimMetaTable)
 		{
 			CrowdComponent->AnimMetaDataTable = AnimMetaTable;
 			CrowdComponent->LoadAnimationsFromDataTable(AnimMetaTable);
 		}
-		CrowdComponent->SetupHISM(CrowdComponent->Mesh, CrowdComponent->Material);
+		CrowdComponent->SetupHISM(CrowdComponent->Mesh, SlotMats);
 	}
 
 	FMessageDialog::Open(
@@ -133,20 +152,17 @@ void ACrowdLegionActor::SpawnLegion()
 	{
 		return;
 	}
-	// 若未显式指定 Mesh，但配置了 DataAsset，自动同步关联的 StaticMesh、Material 与动画元数据
+	// 若未显式指定 Mesh，但配置了 DataAsset，自动同步关联的 StaticMesh；材质列表由 SetupHISM 从 Mesh 槽填充（若 Materials 为空）
 	if (DataAsset)
 	{
 		if (!CrowdComponent->Mesh && !DataAsset->StaticMesh.IsNull())
 		{
 			CrowdComponent->Mesh = DataAsset->StaticMesh.LoadSynchronous();
 		}
-		if (!CrowdComponent->Material && CrowdComponent->Mesh && CrowdComponent->Mesh->GetMaterial(0))
-		{
-			CrowdComponent->Material = CrowdComponent->Mesh->GetMaterial(0);
-		}
 	}
 
-	CrowdComponent->SetupHISM(CrowdComponent->Mesh, CrowdComponent->Material, NumUnits);
+	// InMaterials 为空：保留已有 Materials；若仍空则 SetupHISM 从 Mesh 槽拷贝
+	CrowdComponent->SetupHISM(CrowdComponent->Mesh, TArray<UMaterialInterface*>(), NumUnits);
 	CrowdComponent->ClearCells();
 
 	TArray<FTransform> Transforms;
@@ -170,7 +186,7 @@ void ACrowdLegionActor::SetLegionIdle()
 {
 	if (CrowdComponent)
 	{
-		CrowdComponent->SetAllCellsAnim(IdleAnimIndex, 1.0f, true);
+		CrowdComponent->SetAllCellsAnim(IdleAnimIndex, 1.0f, IsLoopingAnimation(IdleAnimIndex));
 	}
 }
 
@@ -178,7 +194,7 @@ void ACrowdLegionActor::SetLegionRun()
 {
 	if (CrowdComponent)
 	{
-		CrowdComponent->SetAllCellsAnim(RunAnimIndex, 1.0f, true);
+		CrowdComponent->SetAllCellsAnim(RunAnimIndex, 1.0f, IsLoopingAnimation(RunAnimIndex));
 	}
 }
 
@@ -186,7 +202,7 @@ void ACrowdLegionActor::SetLegionAttack()
 {
 	if (CrowdComponent)
 	{
-		CrowdComponent->SetAllCellsAnim(AttackAnimIndex, 1.0f, false);
+		CrowdComponent->SetAllCellsAnim(AttackAnimIndex, 1.0f, IsLoopingAnimation(AttackAnimIndex));
 	}
 }
 
@@ -194,7 +210,7 @@ void ACrowdLegionActor::KillAllLegion()
 {
 	if (CrowdComponent)
 	{
-		CrowdComponent->SetAllCellsAnim(DeathAnimIndex, 1.0f, false);
+		CrowdComponent->SetAllCellsAnim(DeathAnimIndex, 1.0f, IsLoopingAnimation(DeathAnimIndex));
 	}
 }
 
@@ -205,22 +221,25 @@ void ACrowdLegionActor::ClearLegion()
 	{
 		CrowdComponent->ClearCells();
 	}
+	ClearCavalry();
 }
 
 FVector ACrowdLegionActor::GetLegionCenterLocation() const
 {
-	if (!CrowdComponent)
+	UHierarchicalInstancedStaticMeshComponent* TargetHISM = CrowdComponent ? CrowdComponent->GetHISMCmp() : nullptr;
+	if (!TargetHISM || TargetHISM->GetInstanceCount() == 0)
 	{
-		return GetActorLocation();
+		if (CavalryComponent && CavalryComponent->HorseHISMCmp && CavalryComponent->HorseHISMCmp->GetInstanceCount() > 0)
+		{
+			TargetHISM = CavalryComponent->HorseHISMCmp;
+		}
+		else
+		{
+			return GetActorLocation();
+		}
 	}
 
-	UHierarchicalInstancedStaticMeshComponent* HISMCmp = CrowdComponent->GetHISMCmp();
-	if (!HISMCmp)
-	{
-		return GetActorLocation();
-	}
-
-	const int32 Count = HISMCmp->GetInstanceCount();
+	const int32 Count = TargetHISM->GetInstanceCount();
 	if (Count == 0)
 	{
 		return GetActorLocation();
@@ -230,7 +249,7 @@ FVector ACrowdLegionActor::GetLegionCenterLocation() const
 	for (int32 i = 0; i < Count; ++i)
 	{
 		FTransform T;
-		HISMCmp->GetInstanceTransform(i, T, true);
+		TargetHISM->GetInstanceTransform(i, T, true);
 		SumLoc += T.GetLocation();
 	}
 	return SumLoc / static_cast<float>(Count);
@@ -238,7 +257,9 @@ FVector ACrowdLegionActor::GetLegionCenterLocation() const
 
 void ACrowdLegionActor::MarchLegionForward()
 {
-	if (!CrowdComponent || CrowdComponent->GetCellCount() == 0)
+	const bool bHasInfantry = (CrowdComponent && CrowdComponent->GetCellCount() > 0);
+	const bool bHasCavalry = (CavalryComponent && CavalryComponent->GetCellCount() > 0);
+	if (!bHasInfantry && !bHasCavalry)
 	{
 		return;
 	}
@@ -250,7 +271,14 @@ void ACrowdLegionActor::MarchLegionForward()
 	SetActorTickEnabled(true);
 
 	// 全军切换为 Run 动作
-	CrowdComponent->SetAllCellsAnim(RunAnimIndex, 1.0f, true);
+	if (bHasInfantry)
+	{
+		CrowdComponent->SetAllCellsAnim(RunAnimIndex, 1.0f, IsLoopingAnimation(RunAnimIndex));
+	}
+	if (bHasCavalry)
+	{
+		SetCavalryRun();
+	}
 }
 
 void ACrowdLegionActor::StopLegionMarch()
@@ -265,7 +293,11 @@ void ACrowdLegionActor::StopLegionMarch()
 
 	if (CrowdComponent)
 	{
-		CrowdComponent->SetAllCellsAnim(IdleAnimIndex, 1.0f, true);
+		CrowdComponent->SetAllCellsAnim(IdleAnimIndex, 1.0f, IsLoopingAnimation(IdleAnimIndex));
+	}
+	if (CavalryComponent && CavalryComponent->GetCellCount() > 0)
+	{
+		SetCavalryIdle();
 	}
 }
 
@@ -273,12 +305,13 @@ void ACrowdLegionActor::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	if (!bIsMarching || !CrowdComponent)
+	const bool bHasInfantry = (CrowdComponent && CrowdComponent->GetCellCount() > 0);
+	const bool bHasCavalry = (CavalryComponent && CavalryComponent->GetCellCount() > 0);
+	if (!bIsMarching || (!bHasInfantry && !bHasCavalry))
 	{
 		SetActorTickEnabled(false);
 		return;
 	}
-
 	const FVector CurrentCenter = GetLegionCenterLocation();
 	const FVector ToTarget = MarchTargetLocation - CurrentCenter;
 	const float Dist2D = ToTarget.Size2D();
@@ -294,15 +327,205 @@ void ACrowdLegionActor::Tick(float DeltaTime)
 	const FVector MovementDelta = MoveDir * StepDist;
 
 	// 找出所有已阵亡单位 (其 AnimIndex 为 DeathAnimIndex)，忽略其移动
-	TArray<int32> DeadIndices;
-	const TArray<FCrowdCellInstanceData>& Cells = CrowdComponent->GetAllInstanceData();
-	for (int32 i = 0; i < Cells.Num(); ++i)
+	if (bHasInfantry)
 	{
-		if (Cells[i].AnimIndex == DeathAnimIndex)
+		TArray<int32> DeadIndices;
+		const TArray<FCrowdCellInstanceData>& Cells = CrowdComponent->GetAllInstanceData();
+		for (int32 i = 0; i < Cells.Num(); ++i)
 		{
-			DeadIndices.Add(i);
+			if (Cells[i].AnimIndex == DeathAnimIndex)
+			{
+				DeadIndices.Add(i);
+			}
+		}
+		CrowdComponent->BatchMoveCells(MovementDelta, DeadIndices, true, false);
+	}
+	if (bHasCavalry)
+	{
+		TArray<int32> DeadCavalryIndices;
+		const int32 DeathCavalryAnimIdx = CavalryComponent->FindAnimationIndex(CavalryDeathAnimName);
+		for (int32 i = 0; i < CavalryComponent->GetCellCount(); ++i)
+		{
+			FCrowdCellInstanceData CellData;
+			if (CavalryComponent->GetCellData(i, CellData))
+			{
+				const bool bIsDead = (DeathCavalryAnimIdx != INDEX_NONE)
+					? (CellData.AnimIndex == DeathCavalryAnimIdx)
+					: (!CellData.bLoop && !CavalryComponent->IsLoopingAnimation(CellData.AnimIndex));
+				if (bIsDead)
+				{
+					DeadCavalryIndices.Add(i);
+				}
+			}
+		}
+		CavalryComponent->BatchMoveCells(MovementDelta, DeadCavalryIndices, true, false);
+	}
+}
+
+void ACrowdLegionActor::SpawnCavalryLegion()
+{
+	SpawnCavalryLegionCustom(NumCavalryUnits, CavalrySpreadRadius, CavalryIdleAnimName);
+}
+
+void ACrowdLegionActor::SpawnCavalryLegionCustom(int32 InNumUnits, float InSpreadRadius, FName InInitialAnim)
+{
+	if (!CavalryComponent)
+	{
+		return;
+	}
+
+	// 1. 解析马匹静态网格体
+	UStaticMesh* FinalHorseMesh = HorseMesh.Get();
+	if (!FinalHorseMesh && HorseDataAsset)
+	{
+		FinalHorseMesh = HorseDataAsset->GetStaticMesh();
+		if (!FinalHorseMesh && !HorseDataAsset->StaticMesh.IsNull())
+		{
+			FinalHorseMesh = HorseDataAsset->StaticMesh.LoadSynchronous();
 		}
 	}
 
-	CrowdComponent->BatchMoveCells(MovementDelta, DeadIndices, true, false);
+	// 2. 解析骑手静态网格体
+	UStaticMesh* FinalRiderMesh = RiderMesh.Get();
+	if (!FinalRiderMesh && RiderDataAsset)
+	{
+		FinalRiderMesh = RiderDataAsset->GetStaticMesh();
+		if (!FinalRiderMesh && !RiderDataAsset->StaticMesh.IsNull())
+		{
+			FinalRiderMesh = RiderDataAsset->StaticMesh.LoadSynchronous();
+		}
+	}
+
+	// 3. 解析马匹动画元数据数据表
+	UDataTable* FinalHorseAnimTable = HorseAnimMetaDataTable.Get();
+	if (!FinalHorseAnimTable && HorseDataAsset)
+	{
+		const FString BaseDir = FPackageName::GetLongPackagePath(HorseDataAsset->GetOutermost()->GetName());
+		const FString SkelName = HorseDataAsset->GetSkeletalMesh() ? HorseDataAsset->GetSkeletalMesh()->GetName() : HorseDataAsset->GetName();
+		const FString TablePkgPath = BaseDir / (TEXT("DT_") + SkelName + TEXT("_AnimMeta"));
+		FinalHorseAnimTable = Cast<UDataTable>(StaticLoadObject(UDataTable::StaticClass(), nullptr, *(TablePkgPath + TEXT(".") + FPackageName::GetShortName(TablePkgPath))));
+	}
+
+	// 4. 解析骑手动画元数据数据表
+	UDataTable* FinalRiderAnimTable = RiderAnimMetaDataTable.Get();
+	if (!FinalRiderAnimTable && RiderDataAsset)
+	{
+		const FString BaseDir = FPackageName::GetLongPackagePath(RiderDataAsset->GetOutermost()->GetName());
+		const FString SkelName = RiderDataAsset->GetSkeletalMesh() ? RiderDataAsset->GetSkeletalMesh()->GetName() : RiderDataAsset->GetName();
+		const FString TablePkgPath = BaseDir / (TEXT("DT_") + SkelName + TEXT("_AnimMeta"));
+		FinalRiderAnimTable = Cast<UDataTable>(StaticLoadObject(UDataTable::StaticClass(), nullptr, *(TablePkgPath + TEXT(".") + FPackageName::GetShortName(TablePkgPath))));
+	}
+
+	TArray<UMaterialInterface*> HorseMatInterfaces;
+	for (const auto& Mat : HorseMaterials)
+	{
+		HorseMatInterfaces.Add(Mat.Get());
+	}
+
+	TArray<UMaterialInterface*> RiderMatInterfaces;
+	for (const auto& Mat : RiderMaterials)
+	{
+		RiderMatInterfaces.Add(Mat.Get());
+	}
+
+	CavalryComponent->SetupCavalryHISM(
+		FinalHorseMesh,
+		HorseMatInterfaces,
+		FinalHorseAnimTable,
+		FinalRiderMesh,
+		RiderMatInterfaces,
+		FinalRiderAnimTable,
+		InNumUnits);
+
+	CavalryComponent->ClearCells();
+
+	if (InNumUnits <= 0)
+	{
+		return;
+	}
+
+	TArray<FTransform> Transforms;
+	Transforms.Reserve(InNumUnits);
+	const FVector Center = GetActorLocation();
+
+	for (int32 i = 0; i < InNumUnits; ++i)
+	{
+		const float Angle = FMath::FRand() * 2.0f * PI;
+		const float Dist = FMath::Sqrt(FMath::FRand()) * InSpreadRadius;
+		const FVector Offset(FMath::Cos(Angle) * Dist, FMath::Sin(Angle) * Dist, 0.0f);
+		const FRotator Rot(0.0f, bRandomYaw ? (FMath::FRand() * 360.0f) : 0.0f, 0.0f);
+		Transforms.Add(FTransform(Rot, Center + Offset));
+	}
+
+	const FName InitAnim = InInitialAnim.IsNone() ? CavalryIdleAnimName : InInitialAnim;
+	CavalryComponent->BatchAddCellsByName(Transforms, InitAnim, 1.0f, true);
+	UE_LOG(LogTemp, Log, TEXT("[CrowdLegionActor] Spawned %d cavalry units (SpreadRadius=%.1f, InitialAnim='%s')."),
+		InNumUnits, InSpreadRadius, *InitAnim.ToString());
+}
+
+int32 ACrowdLegionActor::AddCavalryUnit(const FTransform& Transform, FName AnimName, float PlayRate, bool bLoop)
+{
+	if (!CavalryComponent)
+	{
+		return INDEX_NONE;
+	}
+
+	// 若双方 HISM 尚未就绪，自动先触发 Setup
+	if (!CavalryComponent->HorseHISMCmp || !CavalryComponent->RiderHISMCmp)
+	{
+		SpawnCavalryLegionCustom(0, 0.0f, AnimName);
+	}
+
+	const FName TargetAnim = AnimName.IsNone() ? CavalryIdleAnimName : AnimName;
+	return CavalryComponent->AddCell(Transform, TargetAnim, PlayRate, bLoop);
+}
+
+void ACrowdLegionActor::SetCavalryIdle()
+{
+	if (CavalryComponent)
+	{
+		CavalryComponent->SetAllCellsAnimByName(CavalryIdleAnimName, 1.0f, true);
+	}
+}
+
+void ACrowdLegionActor::SetCavalryRun()
+{
+	if (CavalryComponent)
+	{
+		CavalryComponent->SetAllCellsAnimByName(CavalryRunAnimName, 1.0f, true);
+	}
+}
+
+void ACrowdLegionActor::SetCavalryAttack()
+{
+	if (CavalryComponent)
+	{
+		CavalryComponent->SetAllCellsAnimByName(CavalryAttackAnimName, 1.0f, false);
+	}
+}
+
+void ACrowdLegionActor::KillAllCavalry()
+{
+	if (CavalryComponent)
+	{
+		CavalryComponent->SetAllCellsAnimByName(CavalryDeathAnimName, 1.0f, false);
+	}
+}
+
+void ACrowdLegionActor::ClearCavalry()
+{
+	if (CavalryComponent)
+	{
+		CavalryComponent->ClearCells();
+	}
+}
+
+
+bool ACrowdLegionActor::IsLoopingAnimation(int32 AnimIndex) const
+{
+	if (CrowdComponent)
+	{
+		return CrowdComponent->IsLoopingAnimation(AnimIndex);
+	}
+	return true;
 }

@@ -11,33 +11,6 @@ class UTexture2D;
 class UStaticMesh;
 class UMaterialInstanceConstant;
 class UDataTable;
-/**
- * 通用网格布局信息 (根据材质插槽数量自动计算行列分配与象限坐标)
- */
-struct FAtlasGridLayout
-{
-	int32 NumSlots = 1;
-	int32 GridCols = 1;
-	int32 GridRows = 1;
-	int32 CellWidth = 2048;
-	int32 CellHeight = 2048;
-	int32 AtlasWidth = 4096;
-	int32 AtlasHeight = 4096;
-
-	static FAtlasGridLayout CalculateLayout(int32 InNumSlots, int32 MaxAtlasSize = 4096)
-	{
-		FAtlasGridLayout Layout;
-		Layout.NumSlots = FMath::Max(1, InNumSlots);
-		Layout.GridCols = FMath::CeilToInt(FMath::Sqrt(static_cast<float>(Layout.NumSlots)));
-		Layout.GridRows = FMath::CeilToInt(static_cast<float>(Layout.NumSlots) / static_cast<float>(Layout.GridCols));
-
-		Layout.AtlasWidth = MaxAtlasSize;
-		Layout.AtlasHeight = MaxAtlasSize;
-		Layout.CellWidth = FMath::Max(1, Layout.AtlasWidth / Layout.GridCols);
-		Layout.CellHeight = FMath::Max(1, Layout.AtlasHeight / Layout.GridRows);
-		return Layout;
-	}
-};
 
 /**
  * A2T 与 HISM 军团资产一键导出与自动化处理管线
@@ -45,11 +18,52 @@ struct FAtlasGridLayout
 class VGCROWDLEGIONEDITOR_API FCrowdLegionExporter
 {
 public:
-	/** Tools 菜单命令入口：从当前 Content Browser 选中的 DataAsset 执行全流程导出与烘焙 */
+	/** Tools 菜单工具 1：Skeletal Mesh 转为 Static Mesh（保留多材质插槽与原始 UV） */
+	static void ExecuteConvertSkeletalMeshToStaticMesh();
+
+	/** Tools 菜单工具 2：生成 Static A2T 材质并赋值给 Static Mesh 对应插槽（去重+保留原节点逻辑+MakeMaterialAttributes->BoneAnim） */
+	static void ExecuteGenerateStaticA2TMaterials();
+
+	/** Tools 菜单工具 3：从当前 Content Browser 选中的 DataAsset 生成/更新动画元数据 DataTable (FUnitAnimationTableRow) */
+	static void ExecuteGenerateAnimMetaDataTableFromSelectedAsset();
+
+	/** Tools 菜单工具 4：选中 DataAsset 烘焙（只烘焙 VAT 与同步已有 MI 参数，不生成 StaticMesh/材质/AnimMetaDT） */
+	static void ExecuteBakeFromSelectedDataAsset();
+
+	/** Tools 菜单工具 5：从当前 Content Browser 选中的 DataAsset 执行全流程一键导出与烘焙 */
 	static void ExecuteExportFromSelectedAsset();
 
-	/** Tools 菜单：生成 Archer 简单版 BoneAnimation 父材质 + 三个 BaseColor MI */
-	static void ExecuteGenerateArcherBoneAnimationMaterials();
+	/** 获取选中的 SkeletalMesh (若直接选中 SkeletalMesh 则返回，若选中 DataAsset 则返回其绑定的 SkeletalMesh) */
+	static USkeletalMesh* GetSelectedSkeletalMesh(UAnimToTextureDataAsset** OutDataAsset = nullptr);
+	/**
+	 * 将指定的源材质（UMaterial）拷贝为新的 A2T 材质，并在原有节点逻辑后无损拼接：
+	 * MakeMaterialAttributes -> MF_CrowdLegionBoneAnimation (Frame 连 GetCrowdLegionFrame) -> UseMaterialAttributes
+	 */
+	static UMaterial* DuplicateAndConvertMaterialToA2T(
+		UMaterial* SourceMat,
+		const FString& TargetPackagePath,
+		const FName TargetAssetName,
+		UMaterialFunction* BoneAnimMF,
+		UMaterialFunction* GetCrowdLegionFrameMF);
+
+	/**
+	 * 为给定的材质接口（UMaterial 或 UMaterialInstance）生成对应的 A2T 材质接口（带去重缓存）：
+	 * - 若为 UMaterial：调用 DuplicateAndConvertMaterialToA2T 生成 A2T 材质
+	 * - 若为 UMaterialInstance：先转换底层 UMaterial 为 A2T 母材质，再创建 A2T 材质实例并全量拷贝参数
+	 */
+	static UMaterialInterface* ConvertMaterialInterfaceToA2T(
+		UMaterialInterface* SourceMatInterface,
+		const FString& TargetDir,
+		UMaterialFunction* BoneAnimMF,
+		UMaterialFunction* GetCrowdLegionFrameMF,
+		TMap<UMaterialInterface*, UMaterialInterface*>& InOutCache);
+
+	/** 根据 SkeletalMesh 插槽列表，为 StaticMesh 生成并赋予对应的 A2T 材质（一一对应） */
+	static bool GenerateAndAssignA2TMaterialsForStaticMesh(
+		USkeletalMesh* SkelMesh,
+		UStaticMesh* StaticMesh,
+		const FString& TargetDir,
+		TArray<UMaterialInterface*>& OutAssignedMaterials);
 
 	/** 获取 Content Browser 中当前选中的 AnimToTextureDataAsset (若未选中返回 nullptr) */
 	static UAnimToTextureDataAsset* GetSelectedAnimToTextureDataAsset();
@@ -57,38 +71,20 @@ public:
 	/** 确保 /VgCrowdLegion/Materials/GetCrowdLegionFrame 存在（纯表达式算帧，无 Custom HLSL） */
 	static bool EnsureGetCrowdLegionFrame(UMaterialFunction*& OutFunc);
 
-	/** 步骤 1: 检查或创建插件 Content 目录下的 MF_CrowdLegionBoneAnimation 与 M_Crowd_Legion */
-	static bool EnsurePluginMasterMaterials(UMaterial*& OutMasterMat, UMaterialFunction*& OutBoneAnimMF);
+	/** 检查或创建插件 Content 目录下的 MF_CrowdLegionBoneAnimation */
+	static bool EnsurePluginBoneAnimationMF(UMaterialFunction*& OutBoneAnimMF);
 
-	/** 确保 / 创建 M_Archer_BoneAnimation（TextureSample + GetCrowdLegionFrame + MF_CrowdLegionBoneAnimation） */
-	static bool EnsureArcherBoneAnimationParentMaterial(UMaterial*& OutParentMat, UMaterialFunction* BoneAnimMF);
-
-	/** 创建或更新三个 Archer BoneAnimation 材质实例并绑定贴图 */
-	static bool EnsureArcherBoneAnimationMaterialInstances(UMaterial* ParentMat);
-
-	/** 步骤 2: 根据 SkeletalMesh 材质合并生成 2x2 Texture Atlas 大图（旧管线；一键导出不再调用） */
-	static UTexture2D* GenerateAtlasTextureFromSkelMesh(USkeletalMesh* SkelMesh, const FString& TargetPackagePath);
-
-	/** 导出 StaticMesh，保留全部材质插槽与原始 UV（不合并插槽、不做 Atlas UV 重映射） */
+	/** 导出 StaticMesh，保留全部材质插槽与原始 UV（保存到目标包路径，自动避开 Lightmap UV1 冲突） */
 	static UStaticMesh* ExportStaticMeshFromSkeletalMesh(USkeletalMesh* SkelMesh, const FString& TargetStaticMeshPath);
 
-	/** 旧管线：导出并 UV 重映射后合并为 1 插槽（已废弃，转发到 ExportStaticMeshFromSkeletalMesh） */
-	static UStaticMesh* ExportStaticMeshWithAtlasUVRemap(USkeletalMesh* SkelMesh, const FString& TargetStaticMeshPath);
-
-	/** 步骤 4: A2T 烘焙，并为每个材质插槽生成/绑定 BoneAnimation MI */
+	/** 烘焙指定 DataAsset（按 BP_AnimToTexture 流程：SetLightMapIndex -> AnimationToTexture -> UpdateMaterialInstanceFromDataAsset） */
 	static bool BakeA2TDataAsset(UAnimToTextureDataAsset* DataAsset, UStaticMesh* BakedMesh);
 
-	/** 步骤 5: 根据 DataAsset 动画序列生成或更新动画元数据 DataTable (FUnitAnimationTableRow) */
+	/** 根据 DataAsset 动画序列生成或更新动画元数据 DataTable (FUnitAnimationTableRow) */
 	static UDataTable* GenerateAnimMetaDataTable(UAnimToTextureDataAsset* DataAsset, const FString& TargetPackagePath);
-
-	/** 在指定包路径确保 BoneAnimation 父材质（Archer 式 Material Attributes 链） */
-	static bool EnsureBoneAnimationParentMaterial(const FString& PackagePath, const FName AssetName, UMaterialFunction* BoneAnimMF, UMaterial*& OutParentMat);
-
-	/** 为 StaticMesh 各插槽创建 BoneAnimation MI 并 SetMaterial */
-	static bool ApplyBoneAnimationMaterialsToStaticMesh(UAnimToTextureDataAsset* DataAsset, UStaticMesh* BakedMesh, UMaterial* ParentMat);
 
 private:
 	static UTexture2D* FindOrCreateVATTexture(UAnimToTextureDataAsset* DataAsset, const FString& Suffix);
-	static void SyncMaterialInstanceRanges(UAnimToTextureDataAsset* DataAsset, UMaterialInstanceConstant* MatInst);
-	static UTexture2D* ExtractBaseColorTexture(UMaterialInterface* Material);
+	/** 安全解析 SoftPtr（避免官方 Get*Texture ensure 崩溃）；不在 Textures/ 下或缺失则创建并写回 SoftPtr */
+	static UTexture2D* EnsureVATTexture(UAnimToTextureDataAsset* DataAsset, TSoftObjectPtr<UTexture2D>& SoftPtr, const FString& Suffix);
 };

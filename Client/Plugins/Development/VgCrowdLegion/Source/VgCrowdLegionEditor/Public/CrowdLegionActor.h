@@ -11,7 +11,7 @@ class USkeletalMesh;
 class UAnimToTextureDataAsset;
 class UCrowdStatsComponent;
 class UCrowdUnitComponent;
-
+class UCavalryUnitComponent;
 /**
  * 军团编辑器视口 Actor (纯 Editor 逻辑)
  * 组合 UCrowdUnitComponent 与 UCrowdStatsComponent 提供场景视口交互与可视化调试测试
@@ -42,6 +42,9 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CrowdLegion", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCrowdStatsComponent> StatsComponent;
 
+	/** 骑兵核心驱动组件 (管理马匹与骑手双 HISM) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CrowdLegion | Cavalry", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCavalryUnitComponent> CavalryComponent;
 	// --- 军团生成配置 (从组件移至 Actor) ---
 	/** 同屏单位生成数量 (默认 1000 实例) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CrowdSetup", meta = (ClampMin = "1", ClampMax = "100000"))
@@ -71,6 +74,62 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | AnimConfig")
 	int32 DeathAnimIndex = 3;
+	// --- 骑兵生成配置 ---
+	/** 马匹静态网格体 (可选；若未指定则自动从 HorseDataAsset 读取) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CavalrySetup")
+	TObjectPtr<UStaticMesh> HorseMesh;
+
+	/** 马匹材质列表 (留空则从网格插槽自动填充) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CavalrySetup")
+	TArray<TObjectPtr<UMaterialInterface>> HorseMaterials;
+
+	/** 马匹 A2T 数据资产 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CavalrySetup")
+	TObjectPtr<UAnimToTextureDataAsset> HorseDataAsset;
+
+	/** 马匹动画元数据数据表 (FUnitAnimationTableRow) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CavalrySetup")
+	TObjectPtr<UDataTable> HorseAnimMetaDataTable;
+
+	/** 骑手静态网格体 (可选；若未指定则自动从 RiderDataAsset 读取) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CavalrySetup")
+	TObjectPtr<UStaticMesh> RiderMesh;
+
+	/** 骑手材质列表 (留空则从网格插槽自动填充) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CavalrySetup")
+	TArray<TObjectPtr<UMaterialInterface>> RiderMaterials;
+
+	/** 骑手 A2T 数据资产 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CavalrySetup")
+	TObjectPtr<UAnimToTextureDataAsset> RiderDataAsset;
+
+	/** 骑手动画元数据数据表 (FUnitAnimationTableRow) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CavalrySetup")
+	TObjectPtr<UDataTable> RiderAnimMetaDataTable;
+
+	/** 骑兵生成数量 (默认 200 骑) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CavalrySetup", meta = (ClampMin = "1", ClampMax = "50000"))
+	int32 NumCavalryUnits = 200;
+
+	/** 骑兵随机散布半径 (厘米) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CavalrySetup", meta = (ClampMin = "100.0"))
+	float CavalrySpreadRadius = 2500.0f;
+
+	/** 骑兵待机动作名称 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CavalryAnimConfig")
+	FName CavalryIdleAnimName = TEXT("Idle");
+
+	/** 骑兵奔跑动作名称 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CavalryAnimConfig")
+	FName CavalryRunAnimName = TEXT("Run");
+
+	/** 骑兵攻击动作名称 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CavalryAnimConfig")
+	FName CavalryAttackAnimName = TEXT("Attack");
+
+	/** 骑兵阵亡动作名称 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CavalryAnimConfig")
+	FName CavalryDeathAnimName = TEXT("Death");
 	/** 用于导出 StaticMesh 的源骨骼网格体 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | MeshExport")
 	TObjectPtr<USkeletalMesh> SourceSkeletalMesh;
@@ -120,6 +179,45 @@ public:
 	/** 停止军团当前的行军移动 */
 	UFUNCTION(CallInEditor, BlueprintCallable, Category = "CrowdLegion | Actions")
 	void StopLegionMarch();
+
+	// --- 骑兵生成与操作接口 ---
+
+	/** 立即生成/重建海量骑兵军团 (详细面板 CallInEditor 快捷按钮 / 蓝图调用) */
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "CrowdLegion | CavalryActions")
+	void SpawnCavalryLegion();
+
+	/** 自定义参数批量生成骑兵阵列 */
+	UFUNCTION(BlueprintCallable, Category = "CrowdLegion | CavalryActions")
+	void SpawnCavalryLegionCustom(int32 InNumUnits, float InSpreadRadius, FName InInitialAnim = TEXT("Idle"));
+
+	/** 单独添加一个骑兵单位 (在指定 Transform 处生成马匹与骑手，返回实例索引) */
+	UFUNCTION(BlueprintCallable, Category = "CrowdLegion | CavalryActions")
+	int32 AddCavalryUnit(const FTransform& Transform, FName AnimName = TEXT("Idle"), float PlayRate = 1.0f, bool bLoop = true);
+
+	/** 将全体骑兵切换为待机动作 */
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "CrowdLegion | CavalryActions")
+	void SetCavalryIdle();
+
+	/** 将全体骑兵切换为奔跑动作 */
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "CrowdLegion | CavalryActions")
+	void SetCavalryRun();
+
+	/** 将全体骑兵切换为攻击动作 */
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "CrowdLegion | CavalryActions")
+	void SetCavalryAttack();
+
+	/** 将全体骑兵切换为阵亡动作 */
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "CrowdLegion | CavalryActions")
+	void KillAllCavalry();
+
+	/** 清空场景中的骑兵实例 */
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "CrowdLegion | CavalryActions")
+	void ClearCavalry();
+
+	/** 获取骑兵组件引用 */
+	UFUNCTION(BlueprintPure, Category = "CrowdLegion | Cavalry")
+	UCavalryUnitComponent* GetCavalryComponent() const { return CavalryComponent.Get(); }
+	bool IsLoopingAnimation(int32 AnimIndex) const;
 
 private:
 	UPROPERTY(Transient)
