@@ -358,7 +358,7 @@ UAnimToTextureInstancePlaybackLibrary::UpdateInstanceFrameData(
 |------|------|
 | 依赖 | `VgCrowdLegion.uplugin` 依赖 `AnimToTexture` |
 | 导出 | `CrowdLegionExporter` 基于官方 `M_Body_BoneAnimation` / `MF_BoneAnimation` 生成军团材质 |
-| 播放 | `UCrowdUnitComponent` + HISM，4 槽 CustomData，支持循环 / 单次定格 |
+| 播放 | `UUnitHISMComponent`（`UCrowdUnitComponent` / `UCavalryUnitComponent`）+ 层表驱动 N 个 HISM，4 槽 CustomData，统一相位，支持循环 / 单次定格 |
 | 插件 Content | 本地测试图可不入库（见 `.gitignore`）；源码在 `Client/Plugins/Development/VgCrowdLegion/Source` |
 
 人群 / 军团场景优先走 VgCrowdLegion 管线；学习官方逻辑、做单网格预览时用本文 + 官方 Mannequin 示例。

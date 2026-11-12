@@ -3,6 +3,7 @@
 #include "CrowdLegionActor.h"
 #include "CrowdUnitComponent.h"
 #include "CavalryUnitComponent.h"
+#include "UnitHISMComponent.h"
 #include "CrowdStatsComponent.h"
 #include "CrowdLegionExporter.h"
 #include "Components/SceneComponent.h"
@@ -13,6 +14,63 @@
 #include "Engine/DataTable.h"
 #include "Misc/MessageDialog.h"
 #include "Misc/PackageName.h"
+
+namespace CrowdLegionActor_Private
+{
+	static UDataTable* MakeLayerTable(
+		UObject* Outer,
+		UStaticMesh* Mesh0,
+		UDataTable* Anim0,
+		UStaticMesh* Mesh1 = nullptr,
+		UDataTable* Anim1 = nullptr)
+	{
+		TArray<FUnitHISMLayerTableRow> Rows;
+		if (Mesh0)
+		{
+			FUnitHISMLayerTableRow Row;
+			Row.StaticMesh = Mesh0;
+			Row.AnimMetaTable = Anim0;
+			Rows.Add(Row);
+		}
+		if (Mesh1)
+		{
+			FUnitHISMLayerTableRow Row;
+			Row.StaticMesh = Mesh1;
+			Row.AnimMetaTable = Anim1;
+			Rows.Add(Row);
+		}
+		return UUnitHISMComponent::CreateTransientLayerTable(Outer, Rows);
+	}
+
+	static UDataTable* TryLoadAnimMetaBesideDataAsset(UAnimToTextureDataAsset* DataAsset)
+	{
+		if (!DataAsset)
+		{
+			return nullptr;
+		}
+		const FString BaseDir = FPackageName::GetLongPackagePath(DataAsset->GetOutermost()->GetName());
+		const FString SkelName = DataAsset->GetSkeletalMesh()
+			? DataAsset->GetSkeletalMesh()->GetName()
+			: DataAsset->GetName();
+		const FString TablePkgPath = BaseDir / (TEXT("DT_") + SkelName + TEXT("_AnimMeta"));
+		const FString ObjectPath = TablePkgPath + TEXT(".") + FPackageName::GetShortName(TablePkgPath);
+		return Cast<UDataTable>(StaticLoadObject(UDataTable::StaticClass(), nullptr, *ObjectPath));
+	}
+
+	static UStaticMesh* ResolveMeshFromDataAsset(UAnimToTextureDataAsset* DataAsset)
+	{
+		if (!DataAsset)
+		{
+			return nullptr;
+		}
+		UStaticMesh* Mesh = DataAsset->GetStaticMesh();
+		if (!Mesh && !DataAsset->StaticMesh.IsNull())
+		{
+			Mesh = DataAsset->StaticMesh.LoadSynchronous();
+		}
+		return Mesh;
+	}
+}
 
 ACrowdLegionActor::ACrowdLegionActor()
 {
@@ -114,26 +172,15 @@ void ACrowdLegionActor::ExportAndBakeA2TLegion()
 	const FString TablePkgPath = BaseDir / (TEXT("DT_") + SkelMeshName + TEXT("_AnimMeta"));
 	UDataTable* AnimMetaTable = FCrowdLegionExporter::GenerateAnimMetaDataTable(TargetDataAsset, TablePkgPath);
 
+	CrowdMesh = BakedStaticMesh;
+	if (AnimMetaTable)
+	{
+		CrowdAnimMetaDataTable = AnimMetaTable;
+	}
 	if (CrowdComponent)
 	{
-		CrowdComponent->Mesh = BakedStaticMesh;
-		CrowdComponent->Materials.Reset();
-		const int32 NumSlots = BakedStaticMesh->GetStaticMaterials().Num();
-		CrowdComponent->Materials.Reserve(NumSlots);
-		TArray<UMaterialInterface*> SlotMats;
-		SlotMats.Reserve(NumSlots);
-		for (int32 SlotIndex = 0; SlotIndex < NumSlots; ++SlotIndex)
-		{
-			UMaterialInterface* SlotMat = BakedStaticMesh->GetMaterial(SlotIndex);
-			CrowdComponent->Materials.Add(SlotMat);
-			SlotMats.Add(SlotMat);
-		}
-		if (AnimMetaTable)
-		{
-			CrowdComponent->AnimMetaDataTable = AnimMetaTable;
-			CrowdComponent->LoadAnimationsFromDataTable(AnimMetaTable);
-		}
-		CrowdComponent->SetupHISM(CrowdComponent->Mesh, SlotMats);
+		UDataTable* LayerDT = CrowdLegionActor_Private::MakeLayerTable(this, CrowdMesh, CrowdAnimMetaDataTable);
+		CrowdComponent->SetupHISM(LayerDT, CrowdComponent->CullDistance, 0);
 	}
 
 	FMessageDialog::Open(
@@ -152,17 +199,27 @@ void ACrowdLegionActor::SpawnLegion()
 	{
 		return;
 	}
-	// 若未显式指定 Mesh，但配置了 DataAsset，自动同步关联的 StaticMesh；材质列表由 SetupHISM 从 Mesh 槽填充（若 Materials 为空）
-	if (DataAsset)
+
+	UStaticMesh* FinalMesh = CrowdMesh.Get();
+	if (!FinalMesh)
 	{
-		if (!CrowdComponent->Mesh && !DataAsset->StaticMesh.IsNull())
-		{
-			CrowdComponent->Mesh = DataAsset->StaticMesh.LoadSynchronous();
-		}
+		FinalMesh = CrowdLegionActor_Private::ResolveMeshFromDataAsset(DataAsset);
+		CrowdMesh = FinalMesh;
 	}
 
-	// InMaterials 为空：保留已有 Materials；若仍空则 SetupHISM 从 Mesh 槽拷贝
-	CrowdComponent->SetupHISM(CrowdComponent->Mesh, TArray<UMaterialInterface*>(), NumUnits);
+	UDataTable* FinalAnimMeta = CrowdAnimMetaDataTable.Get();
+	if (!FinalAnimMeta)
+	{
+		FinalAnimMeta = CrowdLegionActor_Private::TryLoadAnimMetaBesideDataAsset(DataAsset);
+		CrowdAnimMetaDataTable = FinalAnimMeta;
+	}
+
+	UDataTable* LayerDT = CrowdLegionActor_Private::MakeLayerTable(this, FinalMesh, FinalAnimMeta);
+	if (!CrowdComponent->SetupHISM(LayerDT, CrowdComponent->CullDistance, NumUnits))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[CrowdLegionActor] SpawnLegion: SetupHISM failed."));
+		return;
+	}
 	CrowdComponent->ClearCells();
 
 	TArray<FTransform> Transforms;
@@ -226,12 +283,14 @@ void ACrowdLegionActor::ClearLegion()
 
 FVector ACrowdLegionActor::GetLegionCenterLocation() const
 {
-	UHierarchicalInstancedStaticMeshComponent* TargetHISM = CrowdComponent ? CrowdComponent->GetHISMCmp() : nullptr;
+	UHierarchicalInstancedStaticMeshComponent* TargetHISM = CrowdComponent ? CrowdComponent->GetHISM(0) : nullptr;
 	if (!TargetHISM || TargetHISM->GetInstanceCount() == 0)
 	{
-		if (CavalryComponent && CavalryComponent->HorseHISMCmp && CavalryComponent->HorseHISMCmp->GetInstanceCount() > 0)
+		UHierarchicalInstancedStaticMeshComponent* CavalryHISM =
+			CavalryComponent ? CavalryComponent->GetHISM(0) : nullptr;
+		if (CavalryHISM && CavalryHISM->GetInstanceCount() > 0)
 		{
-			TargetHISM = CavalryComponent->HorseHISMCmp;
+			TargetHISM = CavalryHISM;
 		}
 		else
 		{
@@ -416,26 +475,13 @@ void ACrowdLegionActor::SpawnCavalryLegionCustom(int32 InNumUnits, float InSprea
 		FinalRiderAnimTable = Cast<UDataTable>(StaticLoadObject(UDataTable::StaticClass(), nullptr, *(TablePkgPath + TEXT(".") + FPackageName::GetShortName(TablePkgPath))));
 	}
 
-	TArray<UMaterialInterface*> HorseMatInterfaces;
-	for (const auto& Mat : HorseMaterials)
+	UDataTable* LayerDT = CrowdLegionActor_Private::MakeLayerTable(
+		this, FinalHorseMesh, FinalHorseAnimTable, FinalRiderMesh, FinalRiderAnimTable);
+	if (!CavalryComponent->SetupHISM(LayerDT, CavalryComponent->CullDistance, InNumUnits))
 	{
-		HorseMatInterfaces.Add(Mat.Get());
+		UE_LOG(LogTemp, Warning, TEXT("[CrowdLegionActor] SpawnCavalryLegion: SetupHISM failed."));
+		return;
 	}
-
-	TArray<UMaterialInterface*> RiderMatInterfaces;
-	for (const auto& Mat : RiderMaterials)
-	{
-		RiderMatInterfaces.Add(Mat.Get());
-	}
-
-	CavalryComponent->SetupCavalryHISM(
-		FinalHorseMesh,
-		HorseMatInterfaces,
-		FinalHorseAnimTable,
-		FinalRiderMesh,
-		RiderMatInterfaces,
-		FinalRiderAnimTable,
-		InNumUnits);
 
 	CavalryComponent->ClearCells();
 
@@ -470,14 +516,13 @@ int32 ACrowdLegionActor::AddCavalryUnit(const FTransform& Transform, FName AnimN
 		return INDEX_NONE;
 	}
 
-	// 若双方 HISM 尚未就绪，自动先触发 Setup
-	if (!CavalryComponent->HorseHISMCmp || !CavalryComponent->RiderHISMCmp)
+	if (CavalryComponent->GetLayerCount() < 2)
 	{
 		SpawnCavalryLegionCustom(0, 0.0f, AnimName);
 	}
 
 	const FName TargetAnim = AnimName.IsNone() ? CavalryIdleAnimName : AnimName;
-	return CavalryComponent->AddCell(Transform, TargetAnim, PlayRate, bLoop);
+	return CavalryComponent->AddCellByName(Transform, TargetAnim, PlayRate, bLoop);
 }
 
 void ACrowdLegionActor::SetCavalryIdle()

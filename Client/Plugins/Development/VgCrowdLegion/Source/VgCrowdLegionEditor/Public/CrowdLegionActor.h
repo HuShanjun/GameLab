@@ -62,6 +62,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CrowdSetup")
 	TObjectPtr<UAnimToTextureDataAsset> DataAsset;
 
+	/** 步兵 StaticMesh（可选；未指定则从 DataAsset 读取） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CrowdSetup")
+	TObjectPtr<UStaticMesh> CrowdMesh;
+
+	/** 步兵动画元数据表（可选；未指定则按 DataAsset 路径加载 DT_*_AnimMeta） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | CrowdSetup")
+	TObjectPtr<UDataTable> CrowdAnimMetaDataTable;
+
 	// --- 动作状态配置 (在 Actor 中配置映射，不硬编码在通用组件中) ---
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | AnimConfig")
 	int32 IdleAnimIndex = 0;
