@@ -148,11 +148,17 @@ public:
 	UFUNCTION(BlueprintPure, Category = "CrowdLegion | Cell")
 	bool GetCellData(int32 CellIndex, FCrowdCellInstanceData& OutData) const;
 
+	UFUNCTION(BlueprintPure, Category = "CrowdLegion | Cell")
+	bool GetCellTransform(int32 CellIndex, FTransform& OutTransform) const;
+
+	/** CPU 世界空间 Transform 真相源（与 CellsData 下标 1:1） */
+	const TArray<FTransform>& GetAllCellTransforms() const { return CellTransforms; }
+
 	UFUNCTION(BlueprintCallable, Category = "CrowdLegion | Cell")
 	bool UpdateCellTransform(int32 CellIndex, const FTransform& NewTransform, bool bWorldSpace = true);
 
 	UFUNCTION(BlueprintCallable, Category = "CrowdLegion | Cell")
-	void BatchMoveCells(const FVector& MovementDelta, const TArray<int32>& IgnoredIndices, bool bFaceMovementDirection = true, bool bTeleport = false);
+	void BatchMoveCells(const FVector& MovementDelta, bool bFaceMovementDirection = true, bool bTeleport = false);
 
 	UFUNCTION(BlueprintCallable, Category = "CrowdLegion | Animation")
 	void SetCellAnim(int32 CellIndex, int32 NewAnimIndex, float InPlayRate = 1.0f, bool bInLoop = true);
@@ -195,4 +201,8 @@ protected:
 
 	UPROPERTY()
 	TArray<FCrowdCellInstanceData> CellsData;
+
+	/** 世界空间；与 CellsData / 各层实例下标 1:1 */
+	UPROPERTY()
+	TArray<FTransform> CellTransforms;
 };
