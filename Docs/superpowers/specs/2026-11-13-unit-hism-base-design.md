@@ -75,6 +75,7 @@ void SetupHISM(UDataTable* LayerTable, float InCullDistance, int32 PreallocateCo
 
 - `CellsData[i]` 与每一层 `HISM` 实例下标 **1:1**。
 - CRUD / `UpdateCellTransform` / `BatchMoveCells`：先更新逻辑数据，再对**所有层**做相同实例操作；`RemoveCell` 各层统一 **swap-with-last**。
+- `BatchMoveCells` 使用组件内 `CellTransforms`（世界空间）原地更新后 `BatchUpdateInstancesTransforms`；不再接受 `IgnoredIndices`（需跳过的 Cell 由调用方先 `RemoveCell`）。详见 `2026-11-13-batch-move-cell-transforms-design.md`。
 - 任一 HISM 操作失败 → 整次 Cell 操作失败并 Log，避免层间实例数漂移。
 
 **`PushCellCustomData(i)`（每层 L）：**

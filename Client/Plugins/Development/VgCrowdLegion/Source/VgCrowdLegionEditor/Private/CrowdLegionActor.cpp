@@ -4,7 +4,6 @@
 #include "UnitHISMComponent.h"
 #include "CrowdStatsComponent.h"
 #include "Components/SceneComponent.h"
-#include "Components/HierarchicalInstancedStaticMeshComponent.h"
 
 ACrowdLegionActor::ACrowdLegionActor()
 {
