@@ -118,21 +118,18 @@ void ACrowdLegionActor::ClearLegion()
 
 FVector ACrowdLegionActor::GetLegionCenterLocation() const
 {
-	UHierarchicalInstancedStaticMeshComponent* TargetHISM = UnitComponent ? UnitComponent->GetHISM(0) : nullptr;
-	if (!TargetHISM || TargetHISM->GetInstanceCount() == 0)
+	if (!UnitComponent || UnitComponent->GetCellCount() == 0)
 	{
 		return GetActorLocation();
 	}
 
-	const int32 Count = TargetHISM->GetInstanceCount();
+	const TArray<FTransform>& Transforms = UnitComponent->GetAllCellTransforms();
 	FVector SumLoc = FVector::ZeroVector;
-	for (int32 i = 0; i < Count; ++i)
+	for (const FTransform& T : Transforms)
 	{
-		FTransform T;
-		TargetHISM->GetInstanceTransform(i, T, true);
 		SumLoc += T.GetLocation();
 	}
-	return SumLoc / static_cast<float>(Count);
+	return SumLoc / static_cast<float>(Transforms.Num());
 }
 
 void ACrowdLegionActor::MarchLegionForward()
@@ -188,16 +185,22 @@ void ACrowdLegionActor::Tick(float DeltaTime)
 	const FVector Dir = ToTarget.GetSafeNormal2D();
 	const FVector MovementDelta = Dir * MarchSpeed * DeltaTime;
 
-	TArray<int32> DeadIndices;
-	const TArray<FCrowdCellInstanceData>& Cells = UnitComponent->GetAllInstanceData();
-	for (int32 i = 0; i < Cells.Num(); ++i)
+	for (int32 i = UnitComponent->GetCellCount() - 1; i >= 0; --i)
 	{
-		if (Cells[i].AnimIndex == DeathAnimIndex)
+		FCrowdCellInstanceData Data;
+		if (UnitComponent->GetCellData(i, Data) && Data.AnimIndex == DeathAnimIndex)
 		{
-			DeadIndices.Add(i);
+			UnitComponent->RemoveCell(i);
 		}
 	}
-	UnitComponent->BatchMoveCells(MovementDelta, DeadIndices, true, false);
+
+	if (UnitComponent->GetCellCount() == 0)
+	{
+		StopLegionMarch();
+		return;
+	}
+
+	UnitComponent->BatchMoveCells(MovementDelta, true, false);
 }
 
 bool ACrowdLegionActor::IsLoopingAnimation(int32 AnimIndex) const
