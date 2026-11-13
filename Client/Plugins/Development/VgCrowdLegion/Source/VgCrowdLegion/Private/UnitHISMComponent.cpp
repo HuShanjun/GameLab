@@ -219,6 +219,7 @@ int32 UUnitHISMComponent::AddCell(const FTransform& Transform, int32 AnimIndex, 
 	}
 
 	CellsData.Add(Data);
+	CellTransforms.Add(Transform);
 	PushCellCustomData(NewIdx, true);
 	return NewIdx;
 }
@@ -233,6 +234,7 @@ void UUnitHISMComponent::BatchAddCells(const TArray<FTransform>& Transforms, int
 	const int32 StartIdx = CellsData.Num();
 	const int32 AddCount = Transforms.Num();
 	CellsData.Reserve(StartIdx + AddCount);
+	CellTransforms.Reserve(StartIdx + AddCount);
 	const float BaseTime = GetAnimClock(GetWorld());
 
 	for (FUnitHISMLayerRuntime& Layer : Layers)
@@ -240,6 +242,7 @@ void UUnitHISMComponent::BatchAddCells(const TArray<FTransform>& Transforms, int
 		Layer.HISMCmp->AddInstances(Transforms, false, true);
 	}
 
+	CellTransforms.Append(Transforms);
 	for (int32 i = 0; i < AddCount; ++i)
 	{
 		FCrowdCellInstanceData Data;
@@ -284,6 +287,7 @@ bool UUnitHISMComponent::RemoveCell(int32 CellIndex)
 		Layer.HISMCmp->RemoveInstance(CellIndex);
 	}
 	CellsData.RemoveAtSwap(CellIndex);
+	CellTransforms.RemoveAtSwap(CellIndex);
 	return true;
 }
 
@@ -297,6 +301,7 @@ void UUnitHISMComponent::ClearCells()
 		}
 	}
 	CellsData.Empty();
+	CellTransforms.Empty();
 }
 
 bool UUnitHISMComponent::GetCellData(int32 CellIndex, FCrowdCellInstanceData& OutData) const
@@ -309,17 +314,35 @@ bool UUnitHISMComponent::GetCellData(int32 CellIndex, FCrowdCellInstanceData& Ou
 	return true;
 }
 
+bool UUnitHISMComponent::GetCellTransform(int32 CellIndex, FTransform& OutTransform) const
+{
+	if (!CellTransforms.IsValidIndex(CellIndex))
+	{
+		return false;
+	}
+	OutTransform = CellTransforms[CellIndex];
+	return true;
+}
+
 bool UUnitHISMComponent::UpdateCellTransform(int32 CellIndex, const FTransform& NewTransform, bool bWorldSpace)
 {
-	if (!AreLayersReady() || !CellsData.IsValidIndex(CellIndex))
+	if (!AreLayersReady() || !CellsData.IsValidIndex(CellIndex) || !CellTransforms.IsValidIndex(CellIndex))
 	{
 		return false;
 	}
 
+	FTransform WorldT = NewTransform;
+	if (!bWorldSpace)
+	{
+		UHierarchicalInstancedStaticMeshComponent* Primary = Layers[0].HISMCmp;
+		WorldT = NewTransform * Primary->GetComponentTransform();
+	}
+	CellTransforms[CellIndex] = WorldT;
+
 	bool bAllOk = true;
 	for (FUnitHISMLayerRuntime& Layer : Layers)
 	{
-		if (!Layer.HISMCmp->UpdateInstanceTransform(CellIndex, NewTransform, bWorldSpace, true, true))
+		if (!Layer.HISMCmp->UpdateInstanceTransform(CellIndex, WorldT, true, true, true))
 		{
 			bAllOk = false;
 		}
@@ -327,44 +350,30 @@ bool UUnitHISMComponent::UpdateCellTransform(int32 CellIndex, const FTransform& 
 	return bAllOk;
 }
 
-void UUnitHISMComponent::BatchMoveCells(const FVector& MovementDelta, const TArray<int32>& IgnoredIndices, bool bFaceMovementDirection, bool bTeleport)
+void UUnitHISMComponent::BatchMoveCells(const FVector& MovementDelta, bool bFaceMovementDirection, bool bTeleport)
 {
-	if (!AreLayersReady() || CellsData.Num() == 0)
+	if (!AreLayersReady() || CellTransforms.Num() == 0)
 	{
 		return;
 	}
 
-	UHierarchicalInstancedStaticMeshComponent* Primary = Layers[0].HISMCmp;
-	const int32 Count = CellsData.Num();
-	TArray<FTransform> UpdatedTransforms;
-	UpdatedTransforms.SetNumUninitialized(Count);
+	const bool bHasFacing = bFaceMovementDirection && !MovementDelta.GetSafeNormal2D().IsNearlyZero();
+	const FQuat TargetQuat = bHasFacing
+		? MovementDelta.GetSafeNormal2D().Rotation().Quaternion()
+		: FQuat::Identity;
 
-	TSet<int32> IgnoredSet(IgnoredIndices);
-	const FRotator TargetRot = bFaceMovementDirection ? MovementDelta.GetSafeNormal2D().Rotation() : FRotator::ZeroRotator;
-	bool bAnyMoved = false;
-
-	for (int32 i = 0; i < Count; ++i)
+	for (FTransform& T : CellTransforms)
 	{
-		FTransform T;
-		Primary->GetInstanceTransform(i, T, true);
-		if (!IgnoredSet.Contains(i))
+		T.AddToTranslation(MovementDelta);
+		if (bHasFacing)
 		{
-			T.AddToTranslation(MovementDelta);
-			if (bFaceMovementDirection)
-			{
-				T.SetRotation(TargetRot.Quaternion());
-			}
-			bAnyMoved = true;
+			T.SetRotation(TargetQuat);
 		}
-		UpdatedTransforms[i] = T;
 	}
 
-	if (bAnyMoved)
+	for (FUnitHISMLayerRuntime& Layer : Layers)
 	{
-		for (FUnitHISMLayerRuntime& Layer : Layers)
-		{
-			Layer.HISMCmp->BatchUpdateInstancesTransforms(0, UpdatedTransforms, true, true, bTeleport);
-		}
+		Layer.HISMCmp->BatchUpdateInstancesTransforms(0, CellTransforms, true, true, bTeleport);
 	}
 }
 
