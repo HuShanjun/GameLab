@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UnitHISMComponent.h"
+#include "CrowdStatsComponent.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
@@ -510,6 +511,24 @@ void UUnitHISMComponent::SetAllCellsAnim(int32 NewAnimIndex, float InPlayRate, b
 		if (Layer.HISMCmp)
 		{
 			Layer.HISMCmp->MarkRenderStateDirty();
+		}
+	}
+
+	FName AnimName = NAME_None;
+	if (Layers.Num() > 0 && Layers[0].Animations.IsValidIndex(NewAnimIndex))
+	{
+		AnimName = Layers[0].Animations[NewAnimIndex].AnimName;
+	}
+	if (AnimName.IsNone())
+	{
+		AnimName = *FString::Printf(TEXT("Anim_%d"), NewAnimIndex);
+	}
+
+	if (AActor* Owner = GetOwner())
+	{
+		if (UCrowdStatsComponent* Stats = Owner->FindComponentByClass<UCrowdStatsComponent>())
+		{
+			Stats->NotifyAnimSegment(AnimName);
 		}
 	}
 }

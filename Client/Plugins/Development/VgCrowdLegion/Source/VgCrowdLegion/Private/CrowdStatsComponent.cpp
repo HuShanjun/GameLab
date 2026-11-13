@@ -15,6 +15,13 @@
 #include "Engine/GameViewportClient.h"
 #include "Engine/Engine.h"
 #include "Styling/CoreStyle.h"
+#include "UnrealClient.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "HAL/FileManager.h"
+#include "Misc/DateTime.h"
+#include "UObject/UnrealType.h"
+#include "GameFramework/PlayerController.h"
 
 /** 获取与材质渲染器 View.RealTime 严格一致的高精度当前时间戳 */
 static float GetStatsCurrentAnimationTime(const UWorld* World)
@@ -36,14 +43,19 @@ void UCrowdStatsComponent::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (bShowDebugStatsHUD && GetWorld() && GetWorld()->IsGameWorld())
+	if (GetWorld() && GetWorld()->IsGameWorld())
 	{
-		CreateDebugStatsWidget();
+		if (bShowDebugStatsHUD)
+		{
+			CreateDebugStatsWidget();
+		}
+		OpenPerfCsvIfNeeded();
 	}
 }
 
 void UCrowdStatsComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	ClosePerfCsv();
 	RemoveDebugStatsWidget();
 	Super::EndPlay(EndPlayReason);
 }
@@ -52,7 +64,8 @@ void UCrowdStatsComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (GetWorld() && GetWorld()->IsGameWorld())
+	UWorld* World = GetWorld();
+	if (World && World->IsGameWorld())
 	{
 		if (bShowDebugStatsHUD && !DebugStatsWidget.IsValid())
 		{
@@ -61,6 +74,21 @@ void UCrowdStatsComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 		else if (!bShowDebugStatsHUD && DebugStatsWidget.IsValid())
 		{
 			RemoveDebugStatsWidget();
+		}
+
+		if (bEnablePerfCsv && bSegmentActive && !PerfCsvAbsolutePath.IsEmpty())
+		{
+			UGameViewportClient* Viewport = World->GetGameViewport();
+			FStatUnitData* StatUnit = Viewport ? Viewport->GetStatUnitData() : nullptr;
+			if (StatUnit)
+			{
+				SumFrameMs += StatUnit->FrameTime;
+				SumGameMs += StatUnit->GameThreadTime;
+				SumDrawMs += StatUnit->RenderThreadTime;
+				SumGpuMs += StatUnit->GPUFrameTime[0];
+				SumRhitMs += StatUnit->RHITTime;
+				++SegmentSampleCount;
+			}
 		}
 	}
 }
@@ -343,4 +371,137 @@ void UCrowdStatsComponent::RemoveDebugStatsWidget()
 		}
 		DebugStatsWidget.Reset();
 	}
+}
+
+FString UCrowdStatsComponent::BuildPerfCsvPath() const
+{
+	const FString Dir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("CrowdLegion"));
+	IFileManager::Get().MakeDirectory(*Dir, true);
+	const FString Stamp = FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S"));
+	return FPaths::Combine(Dir, FString::Printf(TEXT("PerfStats_%s.csv"), *Stamp));
+}
+
+float UCrowdStatsComponent::ResolveSpreadRadius() const
+{
+	const AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return -1.0f;
+	}
+	const FFloatProperty* FloatProp = FindFProperty<FFloatProperty>(Owner->GetClass(), TEXT("SpreadRadius"));
+	if (!FloatProp)
+	{
+		return -1.0f;
+	}
+	return FloatProp->GetPropertyValue_InContainer(Owner);
+}
+
+void UCrowdStatsComponent::OpenPerfCsvIfNeeded()
+{
+	if (!bEnablePerfCsv || !PerfCsvAbsolutePath.IsEmpty())
+	{
+		return;
+	}
+
+	PerfCsvAbsolutePath = BuildPerfCsvPath();
+	const FString Header = TEXT("Anim,Radius,Units,Poses,Bones,Frame_ms,Game_ms,Draw_ms,GPU_ms,RHIT_ms\n");
+	if (!FFileHelper::SaveStringToFile(Header, *PerfCsvAbsolutePath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[CrowdStats] Failed to create CSV: %s"), *PerfCsvAbsolutePath);
+		PerfCsvAbsolutePath.Reset();
+		return;
+	}
+	UE_LOG(LogTemp, Log, TEXT("[CrowdStats] Perf CSV: %s"), *PerfCsvAbsolutePath);
+
+#if !UE_BUILD_SHIPPING
+	if (UWorld* World = GetWorld())
+	{
+		if (World->IsGameWorld())
+		{
+			if (APlayerController* PC = World->GetFirstPlayerController())
+			{
+				PC->ConsoleCommand(TEXT("stat unit"));
+			}
+		}
+	}
+#endif
+}
+
+void UCrowdStatsComponent::ClosePerfCsv()
+{
+	FlushCurrentSegment();
+	bSegmentActive = false;
+	PerfCsvAbsolutePath.Reset();
+}
+
+void UCrowdStatsComponent::StartSegment(FName AnimName)
+{
+	SegmentAnimName = AnimName;
+	SegmentSampleCount = 0;
+	SumFrameMs = SumGameMs = SumDrawMs = SumGpuMs = SumRhitMs = 0.0;
+	bSegmentActive = true;
+}
+
+void UCrowdStatsComponent::FlushCurrentSegment()
+{
+	if (!bEnablePerfCsv || !bSegmentActive || PerfCsvAbsolutePath.IsEmpty())
+	{
+		return;
+	}
+	if (SegmentSampleCount <= 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[CrowdStats] Skip CSV row for '%s': no Stat Unit samples."),
+			*SegmentAnimName.ToString());
+		return;
+	}
+
+	const double Inv = 1.0 / static_cast<double>(SegmentSampleCount);
+	const UUnitHISMComponent* Comp = GetValidUnitComponent();
+	const int32 Units = Comp ? Comp->GetCellCount() : 0;
+	const int32 Poses = GetActivePoseCount();
+	const int32 Bones = GetTotalEquivalentBones();
+	const float Radius = ResolveSpreadRadius();
+
+	const FString Line = FString::Printf(
+		TEXT("%s,%.0f,%d,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f\n"),
+		*SegmentAnimName.ToString(),
+		Radius,
+		Units,
+		Poses,
+		Bones,
+		SumFrameMs * Inv,
+		SumGameMs * Inv,
+		SumDrawMs * Inv,
+		SumGpuMs * Inv,
+		SumRhitMs * Inv);
+
+	if (!FFileHelper::SaveStringToFile(
+		Line,
+		*PerfCsvAbsolutePath,
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM,
+		&IFileManager::Get(),
+		EFileWrite::FILEWRITE_Append))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[CrowdStats] Failed to append CSV row."));
+	}
+}
+
+void UCrowdStatsComponent::NotifyAnimSegment(FName AnimName)
+{
+	if (!bEnablePerfCsv)
+	{
+		return;
+	}
+
+	OpenPerfCsvIfNeeded();
+	if (PerfCsvAbsolutePath.IsEmpty())
+	{
+		return;
+	}
+
+	if (bSegmentActive)
+	{
+		FlushCurrentSegment();
+	}
+	StartSegment(AnimName);
 }
