@@ -44,6 +44,14 @@ public:
 		DebugStatsFontSize = FMath::Clamp(NewFontSize, 8, 72);
 	}
 
+	/** 为 true 时 BeginPlay 创建时间戳 CSV，并在 Notify 边界写出段均值 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CrowdLegion | Stats")
+	bool bEnablePerfCsv = true;
+
+	/** 动画段切换完成时调用：结算上一段均值行并开始新段 */
+	UFUNCTION(BlueprintCallable, Category = "CrowdLegion | Stats")
+	void NotifyAnimSegment(FName AnimName);
+
 	UFUNCTION(BlueprintPure, Category = "CrowdLegion | Stats")
 	int32 GetBonesPerUnit() const;
 
@@ -72,5 +80,22 @@ public:
 private:
 	UUnitHISMComponent* GetValidUnitComponent() const;
 
+	void OpenPerfCsvIfNeeded();
+	void ClosePerfCsv();
+	void StartSegment(FName AnimName);
+	void FlushCurrentSegment();
+	float ResolveSpreadRadius() const;
+	FString BuildPerfCsvPath() const;
+
 	TSharedPtr<SWidget> DebugStatsWidget;
+
+	FString PerfCsvAbsolutePath;
+	bool bSegmentActive = false;
+	FName SegmentAnimName = NAME_None;
+	int32 SegmentSampleCount = 0;
+	double SumFrameMs = 0.0;
+	double SumGameMs = 0.0;
+	double SumDrawMs = 0.0;
+	double SumGpuMs = 0.0;
+	double SumRhitMs = 0.0;
 };
